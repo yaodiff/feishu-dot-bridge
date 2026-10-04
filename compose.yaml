@@ -1,0 +1,23 @@
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DATABASE_PATH: /data/bridge.sqlite
+      FEISHU_APPS_FILE: /config/feishu-apps.json
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - bridge-data:/data
+      - ./config/feishu-apps.json:/config/feishu-apps.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  bridge-data:

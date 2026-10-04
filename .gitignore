@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+config/
+data/
+*.sqlite*
+*.db*
+*.log
+coverage/
+.DS_Store
+*.pem
+*.key
+*.p12
+*.zip
+*.tgz

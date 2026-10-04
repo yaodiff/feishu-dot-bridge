@@ -1,0 +1,10 @@
+[
+  {
+    "appId": "cli_REPLACE_WITH_YOUR_APP_ID",
+    "tenantKey": "REPLACE_WITH_VERIFIED_TENANT_KEY",
+    "appSecretEnv": "FEISHU_APP_SECRET",
+    "encryptKeyEnv": "FEISHU_ENCRYPT_KEY",
+    "verificationTokenEnv": "FEISHU_VERIFICATION_TOKEN",
+    "domain": "feishu"
+  }
+]
