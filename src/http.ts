@@ -22,7 +22,7 @@ export function makeApp(config: AppConfig, bridge: Bridge, auth: Authenticator) 
       }
       const appId = /^\/feishu\/events\/([A-Za-z0-9_-]+)$/.exec(url.pathname)?.[1];
       if (appId && req.method === 'POST') {
-        const app = config.apps.find(a => a.appId === appId); if (!app) return json({ error: 'not_found' }, 404);
+        const app = config.apps.find(a => a.appId === appId && a.ingress !== 'websocket'); if (!app) return json({ error: 'not_found' }, 404);
         if (!req.headers.get('content-type')?.startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
         const raw = await req.text(); if (Buffer.byteLength(raw) > 262144) return json({ error: 'body_too_large' }, 413);
         const decoded = decodeFeishu(app, raw, req.headers);

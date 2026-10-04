@@ -24,7 +24,7 @@
 - MVP 只处理用户发给机器人的 **p2p 文字消息**
 - 官方 MCP v2 SDK `@modelcontextprotocol/server@2.3.0`，协议 `2026-07-28`
 - 外部 OAuth2.1 身份提供商，JWT/JWKS 验证，scope `bridge:use`
-- 飞书签名、密文、时间窗、tenant/app 校验；机器人消息与群消息直接忽略
+- 飞书入站可选加密签名 webhook（默认）或官方 SDK WebSocket；两者都校验 tenant/app，忽略机器人与群消息
 - SQLite 持久化绑定、收件箱、订阅、发件队列；`message_id` 去重，按队列保持投递顺序，有限重试
 - Standard Webhooks 签名与 challenge；callback HTTPS、明确主机白名单、公共 IP 校验、连接时 DNS 固定、拒绝重定向
 - 取消绑定会取消未开始的任务；只读 `delivery_status` 区分 pending/sent/dead/uncertain
@@ -41,7 +41,7 @@ npm test
 npm run demo
 ```
 
-演示完全离线，使用明确标为 `MOCK` 的 dot 接收器和飞书发送器，不需要 API Key，不会访问真实账号或发送消息。19 项初始测试覆盖多用户路由、绑定、越权、JWT、SSRF、飞书签名、重放、轮换、取消、持久化和实际 MCP2 HTTP 契约；以当前 `npm test` 输出为准。
+演示完全离线，使用明确标为 `MOCK` 的 dot 接收器和飞书发送器，不需要 API Key，不会访问真实账号或发送消息。31 项测试覆盖多用户路由、绑定、越权、JWT、SSRF、飞书签名、重放、轮换、取消、持久化和实际 MCP2 HTTP 契约；以当前 `npm test` 输出为准。
 
 ## 运行真实服务需要什么
 
@@ -60,12 +60,20 @@ node --env-file=.env dist/src/main.js
 你还需要自行准备：
 
 - 一个域名、可信 HTTPS 与持久化磁盘
-- 已开启机器人的飞书企业自建应用，以及事件订阅、加密密钥和最小消息权限
+- 已开启机器人的飞书企业自建应用，以及事件订阅和最小消息权限（webhook 模式另需加密密钥）
 - 能完成 ChatGPT OAuth2.1 连接的身份提供商；本项目是资源服务器，不是 OAuth 授权服务器
 - 支持 MCP Events 的 dot/工作区权限，手动配置并连接本 MCP 插件
 - 来自实际 ChatGPT 订阅的 callback 主机名白名单；不要填猜测地址或 `*`
 
 完整步骤与配置说明见 [部署指南](docs/DEPLOYMENT.md)。不要把 ChatGPT 密码、会话 cookie、OpenAI API Key 或飞书 App Secret 发到聊天里。
+
+## 已有飞书应用使用长连接？
+
+可为该应用显式设置 `ingress: "websocket"`，继续使用官方 Node SDK 长连接接收消息，无需改成 HTTP 回调，也不修改飞书应用的安全设置。示例见 [WebSocket 配置](examples/feishu-apps.websocket.json) 和 [部署指南](docs/DEPLOYMENT.md#websocket-长连接入站)。未设置 ingress 时保持原来的 webhook 模式。
+
+**先确认消费者归属：** 同 app 多条长连接按集群分发，不是广播。已有消费者仍在运行时，不要启动第二条桥接连接。应用如果同时承担其他事件/卡片功能，应把导出的文字消息处理器与原 `im.message.receive_v1` handler 组合执行，并保留所有其它处理器；直接再次 register 同一事件会覆盖原handler。只有确认本服务是该 app 的唯一消费者且其它事件无需它处理时，才可设置 `websocketExclusiveConsumer: true`；示例默认 false，会拒绝启动。
+
+WS 只替换飞书入站，MCP 的公网 HTTPS、OAuth 和 dot 订阅仍然需要配置。当前 WS 握手、真实收发和其它事件共存没有完成实网验收。
 
 ## 用户配对步骤
 
@@ -82,7 +90,7 @@ node --env-file=.env dist/src/main.js
 
 - POST `/mcp`：工具与事件方法，共用 OAuth 认证；只接受现代 MCP2 请求
 - GET `/.well-known/oauth-protected-resource/mcp`：OAuth 资源元数据
-- POST `/feishu/events/<appId>`：飞书加密事件
+- POST `/feishu/events/<appId>`：仅 webhook 应用的飞书加密事件；WebSocket 应用此路由返回404
 - GET `/healthz`：仅进程健康，不代表外部服务已连通
 
 工具：`begin_binding`、`binding_status`、`unlink_binding`、`reply_to_feishu`、`delivery_status`

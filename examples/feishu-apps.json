@@ -5,6 +5,7 @@
     "appSecretEnv": "FEISHU_APP_SECRET",
     "encryptKeyEnv": "FEISHU_ENCRYPT_KEY",
     "verificationTokenEnv": "FEISHU_VERIFICATION_TOKEN",
-    "domain": "feishu"
+    "domain": "feishu",
+    "ingress": "webhook"
   }
 ]

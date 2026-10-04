@@ -6,7 +6,8 @@
 
 - owner 仅由固定可信 issuer/JWKS 的 JWT 验证结果派生，校验签名、alg、aud、sub、iat、exp、scope；默认 token 最长1小时
 - 配对码192bit随机，仅存hash，最长5分钟，原子消费；绑定身份包含 app+tenant+open_id，不允许抢占或隐式替换
-- Webhook认证包含原始字节签名、时间窗、加密、token、app、tenant；只接收人类账号的私聊文字
+- 默认Webhook认证包含原始字节签名、时间窗、加密、token、app、tenant；只接收人类账号的私聊文字
+- 可选WS仅接受官方SDK认证连接的事件，校验固定app/tenant；不依赖HTTP签名，不开放明文HTTP入口；SDK原始日志静默
 - 严格工具参数，禁止任意目标chat；owner-scoped事件+绑定检查；稳定幂等键
 - HTTPS callback允许列表、每次DNS公共地址检查和连接固定、TLS主机校验、不跟随重定向、不携带用户OAuth token
 - SQLite事务、持久化去重、有限重试、订阅撤销和到期检查、callback signing secret的AES-GCM加密
@@ -21,6 +22,8 @@
 - **存储：** 消息正文、标识、callback URL在DB中可读；磁盘/备份必须加密和限制访问。应用加密只覆盖callback signing secret
 - **重试：** 非绝对exactly-once；上游接受后本地崩溃可能状态不明。Feishu稳定uuid去重窗口有限，55分钟后停止自动回复重试并标记uncertain
 - **撤销竞态：** 解绑取消未开始任务，不能撤回已经发送出去的HTTP请求
+- **WS消费者竞争：** 同app多连接是分发而非广播。独占声明和本进程防重不能探测远端。已有其它事件/卡片消费者时必须组合原文字handler并整合，不能重复register覆盖原handler，也不能新增竞争连接；本服务不接管这些额外事件。导出的内部handler不认证外部JSON，不能暴露到HTTP
+- **WS终止失败：** SDK重连仅处理瞬时故障；终止onError会令整组startup失败，或使运行中的main停止HTTP并非零退出，需明确的进程重启策略
 - **部署：** 单进程单数据库，禁止多个副本；内建限流不能代替网关、审计、容量和DoS防护
 - **日志与秘密：** 反向代理/IdP/云平台不得记录正文和认证头；本仓库不含实密钥，勿在issue粘贴它们
 

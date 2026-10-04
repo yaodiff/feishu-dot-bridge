@@ -25,14 +25,33 @@
 
 1. 在对应官方开放平台创建企业自建应用、开启机器人并限制可用范围
 2. 启用用户发给机器人的单聊消息接收与发送/回复所需的最小权限。权限名称以控制台当前版本为准，不开群聊/文件/通讯录权限作为捷径
-3. 订阅 `im.message.receive_v1`，启用消息加密，配置 Encrypt Key 和 Verification Token
-4. 事件回调填 `https://你的域名/feishu/events/<真实appId>`；确认官方 URL verification challenge 验证通过
+3. 订阅 `im.message.receive_v1`。默认 webhook 模式需启用消息加密，配置 Encrypt Key 和 Verification Token；已有长连接请看下面的 WS 分支，不要改变应用安全设置
+4. 仅 webhook 模式的事件回调填 `https://你的域名/feishu/events/<真实appId>`；确认官方 URL verification challenge 验证通过
 5. 在受控配置中设置准确 tenant key。该值需从管理员/官方已认证事件核实，不能从未验证的请求自动注册租户
 6. 配置 `config/feishu-apps.json`。文件中只有凭证环境变量名，实际秘密放在私有环境或 secret manager
 
 每个 app ID 只允许一项配置与一个 tenant key。需要多个企业时，分别配置每个企业自己的自建应用；不支持同一 ISV app 在多个企业安装后自动换取 tenant token。
 
-本实现刻意要求签名和加密。若你所在 Feishu 部署的 challenge/签名行为不同，先通过官方沙箱核实并修改适配器/测试，不能为了通过配置而关闭认证。
+Webhook 实现刻意要求签名和加密。若你所在 Feishu 部署的 challenge/签名行为不同，先通过官方沙箱核实并修改适配器/测试，不能为了通过配置而关闭认证。
+
+
+### WebSocket 长连接入站
+
+保持飞书应用当前的长连接接收方式与原有安全配置，不改验证token、加密key、事件订阅或权限。使用 `examples/feishu-apps.websocket.json` 作为本服务配置参考：填写已核实的 appId/tenantKey，`appSecretEnv` 指向安全存储中的现有App Secret，`ingress` 为 `websocket`。此模式不读取 Encrypt Key/Verification Token，不声称逐事件HTTP签名已验证。
+
+示例的 `websocketExclusiveConsumer` 默认 false，必须在下面条件核实后显式设为 true 才能启动：
+
+- 本服务是该 app 的唯一在运行长连接消费者，包含其它电脑/容器/旧实例。项目内只能阻止同一进程重复启动，不能发现远端连接
+- app若另有事件/卡片功能，本服务的单一文字handler不足以承接这些功能，不能用它替换原消费者。应停在此处，把 `authenticatedWebSocketMessageHandler` 与原 `im.message.receive_v1` handler 组合执行，同时保留所有其它既有处理器；不要运行第二条连接竞争事件。官方 `EventDispatcher.register` 对同一个事件key会替换旧handler，因此不能仅再次 register 桥接handler，否则会无声覆盖原业务
+- 操作者已确认应用scope/可用范围允许这次测试，仍需使用本人测试账号；这项配置值不代表用户授权或远端状态已被程序验证
+
+导出的handler只做字段/身份约束检查，并不认证任意传入JSON。只能让既有官方SDK的已认证WS dispatcher调用；不能挂到HTTP路由，也不能直接从外部表单/请求转发数据。修改既有消费者时，应持有原handler函数引用，注册一个组合handler调用原业务与桥接持久化逻辑；必须等待二者的必要持久化完成再ack，并确保各自幂等，遵守平台的处理时限。先测试其它8类事件/卡片和原文字handler仍然工作，再切换，不能凭文档说明就当作兼容验收。
+
+独立WS启动器只注册 `im.message.receive_v1`，快速校验并入SQLite队列，handler不等待dot或飞书发送API；重试、去重与回复继续用原队列。`onReady`之前不宣告bridge启动完成；初始握手最长15秒；任一app终止失败都会使整组启动失败，包括先ready后失败的app，并关闭所有已建连接。临时断线由SDK重连；SDK `onError` 代表不可恢复或重试已耗尽，不会被当作普通重连。启动完成后收到这一终止事件，会关闭全部WS入口、停止HTTP服务并以非零退出码退出，由明确配置的进程管理器/Compose restart策略决定重启，不能让健康端点继续掩盖死连接。SDK日志被静默，应用只输出固定生命周期标签，不输出连接URL（可能包含短期凭证）或消息正文。
+
+WS app 的 `/feishu/events/<appId>` 返回404，不能把明文事件通过HTTP伪装成已认证WS消息。其它 webhook app继续原行为。SDK独占与DB单进程限制都要满足，不支持通过多副本获得广播。
+
+只有飞书入站不需要公网回调；MCP端点仍需要公网HTTPS，dot侧仍需要OAuth、MCP Events和签名callback。此次源码只用mock SDK连接器和真实EventDispatcher进行本地测试，未连接真实飞书长连接，不能当作线上E2E通过。
 
 ## 4. 配置和启动
 

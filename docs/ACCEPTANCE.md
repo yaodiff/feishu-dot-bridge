@@ -6,7 +6,9 @@
 - [ ] HTTPS证书、准确Host/Origin配置、callback精确白名单、生效的DNS/网络策略
 - [ ] IdP authorization-code+PKCE S256、精确redirect、resource/aud/scope、token刷新，撤销和失效流程
 - [ ] MCP discover/list 能被真实插件管理页识别，工具和事件重新扫描成功
-- [ ] 飞书机器人最小权限、应用范围、加密challenge、签名、固定tenant/app校验
+- [ ] 飞书机器人最小权限、应用范围、固定tenant/app校验；webhook模式验证加密challenge及签名
+- [ ] WS模式确认唯一消费者，无旧进程/其它电脑竞争同app；若存在其它事件/卡片功能，整合原dispatcher而不覆盖原处理器
+- [ ] WS模式真实SDK握手onReady、多app启动失败、断线重连、SDK终止失败退出、关停、身份拒绝与HTTP明文拒绝验收；未修改现有应用安全设置
 - [ ] 两个独立OAuth账号 + 两个飞书用户，各自绑定现有dot，不串线
 - [ ] 配对码过期/重放/转发风险告知，错误身份绑定被拒绝，解绑后可重新配对
 - [ ] 真实dot订阅签名challenge通过；消息事件送到正确dot；真实回传只到原DM

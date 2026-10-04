@@ -28,9 +28,15 @@ Advertise `server/discover` 中 `tools:{}`、`events:{}`，实现 `events/list`�
 
 ## 飞书
 
-选用官方 Node SDK 进行真实回复；入站使用小型严格 webhook 适配器，校验原始加密字节的 SHA256(timestamp+nonce+encryptKey+body)、5分钟新鲜度、AES256-CBC、verification token、固定 app/tenant、user+p2p+text。加密和签名实现与官方 SDK 对照，额外补原始字节与时间窗校验。
+选用官方 Node SDK 进行真实回复；默认入站使用小型严格 webhook 适配器，校验原始加密字节的 SHA256(timestamp+nonce+encryptKey+body)、5分钟新鲜度、AES256-CBC、verification token、固定 app/tenant、user+p2p+text。加密和签名实现与官方 SDK 对照，额外补原始字节与时间窗校验。
 
-MVP 未采用 Channel SDK 的 WebSocket/批处理抽象：原始 webhook tenant/app 身份与数据库事务去重更易明确审查。官方 Channel SDK 已核查，可作为后续传输适配器；不能仅凭其 senderId 忽略 app/tenant 命名空间。
+可选 `ingress=websocket` 使用官方 Node SDK 1.74.0 的 `WSClient.start({eventDispatcher})`、`onReady/onError` 和 `close({force:true})`。SDK 的 start Promise 返回不等于握手成功；启动器必须等待 onReady，初始连接超时/失败会清理全部已建连接。临时断线重连由同一个 SDK client 管理，不启动额外 worker。SDK终止onError在整组startup阶段会拒绝整个startup；运行期则关闭所有入口并通知main非零退出，不能假定SDK会在终止失败后自行恢复。
+
+WS 安全依据是 SDK 用 appId/appSecret 向官方平台建立的认证连接及 TLS，不是不存在的 x-lark HTTP 签名。SDK将解析后的原始事件传给 EventDispatcher，再把 header/event 展平成 handler 参数；适配器要求其中 app_id、tenant_key 与本地固定应用配置匹配，sender tenant（如有）也需匹配。仍只处理 user/p2p/text、限制正文长度、丢弃过旧消息。不能从公网HTTP调用这个内部 mapper；WS应用的HTTP事件路径被关闭。
+
+官方SDK文档明确多连接采用集群分发而非广播。因此内置启动器要求管理员显式确认独占，且全进程同app只建一个连接。它不能检测另一进程/主机的消费者。现有app若还处理其他事件/卡片，不要再启动此独立消费者；应将 `authenticatedWebSocketMessageHandler` 与原im.message.receive_v1处理器组合执行，接入原来的已认证 dispatcher，不替换原文字逻辑或其它处理器。SDK register同事件key会覆盖旧handler，因此必须显式组合。该导出函数本身不认证传入JSON，绝不能接成HTTP入口。此MVP独立模式只注册文字消息handler，不声称支持所有已订阅的事件或卡片。
+
+未采用 Channel SDK 的批处理抽象，避免隐藏原始 tenant/app 身份与持久化事务去重边界。不能仅凭 senderId 忽略 app/tenant 命名空间。
 
 去重键为 app+tenant+message_id，不使用可在重试中变化的 event_id。消息文本不会变成绑定身份、callback地址或目标chat参数。配对命令不保存正文、不作为普通消息投递。
 
@@ -42,4 +48,4 @@ MCP `reply_to_feishu` 只接受 event_id/text；目标app/message从owner-scoped
 
 ## 已验证与未验证
 
-本地使用真实 MCP2 SDK 与真实密码算法，外部点使用明确标记 MOCK 的适配器。包括磁盘重启恢复、回调签名、双用户隔离、协议头/Origin、JWT 错误场景。未验证实际 OpenAI OAuth UI、真实 callback DNS/TLS、真实 Feishu URL verification/reply、Docker 构建或公开部署；它们属于验收清单，不是已完成能力的证据。
+本地使用真实 MCP2 SDK 与真实密码算法，外部点使用明确标记 MOCK 的适配器。包括磁盘重启恢复、回调签名、双用户隔离、协议头/Origin、JWT 错误场景。未验证实际 OpenAI OAuth UI、真实 callback DNS/TLS、真实 Feishu URL verification/WS handshake/reply、Docker 构建或公开部署；它们属于验收清单，不是已完成能力的证据。

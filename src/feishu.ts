@@ -5,8 +5,32 @@ import { z } from 'zod';
 import { equal } from './crypto.js';
 import { BridgeError, type FeishuApp, type Inbound, type FeishuSender } from './types.js';
 const id = z.string().min(1).max(256);
-const eventSchema = z.object({ schema: z.literal('2.0'), header: z.object({ app_id: id, tenant_key: id, token: id, event_type: id }), event: z.object({ sender: z.object({ sender_type: z.string(), tenant_key: id.optional(), sender_id: z.object({ open_id: id }) }), message: z.object({ message_id: id, chat_id: id, chat_type: z.string(), message_type: z.string(), content: z.string().max(64000), create_time: z.string() }) }) });
+const messageEventSchema = z.object({ sender: z.object({ sender_type: z.string(), tenant_key: id.optional(), sender_id: z.object({ open_id: id }) }), message: z.object({ message_id: id, chat_id: id, chat_type: z.string(), message_type: z.string(), content: z.string().max(64000), create_time: z.string() }) });
+const eventSchema = z.object({ schema: z.literal('2.0'), header: z.object({ app_id: id, tenant_key: id, token: id, event_type: id }), event: messageEventSchema });
+const websocketEventSchema = messageEventSchema.extend({ app_id: id, tenant_key: id, event_type: z.literal('im.message.receive_v1') });
+export type FeishuMessageResult = { message: Inbound } | { ignored: true };
+function normalizeMessage(app: FeishuApp, event: z.infer<typeof messageEventSchema>, now: number): FeishuMessageResult {
+  const { sender, message } = event;
+  if (sender.tenant_key && sender.tenant_key !== app.tenantKey) throw new BridgeError('invalid_feishu_identity', 403);
+  if (sender.sender_type !== 'user' || message.chat_type !== 'p2p' || message.message_type !== 'text') return { ignored: true };
+  let text: string;
+  try { text = z.object({ text: z.string().min(1).max(12000) }).parse(JSON.parse(message.content)).text; } catch { throw new BridgeError('invalid_feishu_text'); }
+  const time = Number(message.create_time);
+  if (!Number.isSafeInteger(time) || time > now + 60000 || now - time > 24 * 3600000) return { ignored: true };
+  return { message: { appId: app.appId, tenantKey: app.tenantKey, openId: sender.sender_id.open_id, messageId: message.message_id, chatId: message.chat_id, text, timestamp: new Date(time).toISOString() } };
+}
+/** Internal trusted-channel adapter ONLY. Caller must be the official SDK WS dispatcher
+ * on the authenticated connection for this app, never an HTTP caller supplying plaintext.
+ * The official dispatcher flattens authenticated event.header and event.event together. */
+export function decodeFeishuWebSocket(app: FeishuApp, data: unknown, now = Date.now()): FeishuMessageResult {
+  if (app.ingress !== 'websocket') throw new BridgeError('wrong_feishu_transport', 403);
+  const parsed = websocketEventSchema.safeParse(data);
+  if (!parsed.success) throw new BridgeError('invalid_feishu_ws_payload');
+  if (parsed.data.app_id !== app.appId || parsed.data.tenant_key !== app.tenantKey) throw new BridgeError('invalid_feishu_identity', 403);
+  return normalizeMessage(app, parsed.data, now);
+}
 export function decodeFeishu(app: FeishuApp, raw: string, headers: Headers, now = Date.now()): { challenge: string } | { message: Inbound } | { ignored: true } {
+  if (app.ingress === 'websocket' || !app.encryptKey || !app.verificationToken) throw new BridgeError('wrong_feishu_transport', 403);
   const ts = headers.get('x-lark-request-timestamp') ?? '', nonce = headers.get('x-lark-request-nonce') ?? '', signature = headers.get('x-lark-signature') ?? '';
   if (!/^\d{10}$/.test(ts) || !nonce || nonce.length > 256 || Math.abs(now - Number(ts) * 1000) > 300000) throw new BridgeError('invalid_feishu_signature', 401);
   const expected = createHash('sha256').update(ts + nonce + app.encryptKey + raw).digest('hex');
@@ -24,21 +48,18 @@ export function decodeFeishu(app: FeishuApp, raw: string, headers: Headers, now 
   if (challenge.success) { if (!equal(challenge.data.token, app.verificationToken)) throw new BridgeError('invalid_feishu_token', 401); return { challenge: challenge.data.challenge }; }
   const parsed = eventSchema.safeParse(data);
   if (!parsed.success) throw new BridgeError('invalid_feishu_payload', 400);
-  const { header, event: { sender, message } } = parsed.data;
-  if (header.app_id !== app.appId || header.tenant_key !== app.tenantKey || (sender.tenant_key && sender.tenant_key !== app.tenantKey) || !equal(header.token, app.verificationToken)) throw new BridgeError('invalid_feishu_identity', 403);
-  if (header.event_type !== 'im.message.receive_v1' || sender.sender_type !== 'user' || message.chat_type !== 'p2p' || message.message_type !== 'text') return { ignored: true };
-  let text: string;
-  try { text = z.object({ text: z.string().min(1).max(12000) }).parse(JSON.parse(message.content)).text; } catch { throw new BridgeError('invalid_feishu_text'); }
-  const time = Number(message.create_time);
-  if (!Number.isSafeInteger(time) || time > now + 60000 || now - time > 24 * 3600000) return { ignored: true };
-  return { message: { appId: app.appId, tenantKey: app.tenantKey, openId: sender.sender_id.open_id, messageId: message.message_id, chatId: message.chat_id, text, timestamp: new Date(time).toISOString() } };
+  const { header, event } = parsed.data;
+  if (header.app_id !== app.appId || header.tenant_key !== app.tenantKey || !equal(header.token, app.verificationToken)) throw new BridgeError('invalid_feishu_identity', 403);
+  if (header.event_type !== 'im.message.receive_v1') return { ignored: true };
+  return normalizeMessage(app, event, now);
 }
+export const silentLarkLogger = { debug() {}, info() {}, warn() {}, error() {}, trace() {} };
+export function createLarkHttp() { const http = axios.create({ timeout: 10000, maxRedirects: 0, maxContentLength: 262144 }); http.interceptors.response.use(response => response.data); return http as unknown as NonNullable<ConstructorParameters<typeof lark.Client>[0]['httpInstance']>; }
 export class LarkSender implements FeishuSender {
   private clients = new Map<string, lark.Client>();
   constructor(apps: FeishuApp[]) {
-    const http = axios.create({ timeout: 10000, maxRedirects: 0, maxContentLength: 262144 });
-    http.interceptors.response.use(response => response.data);
-    for (const app of apps) this.clients.set(app.appId, new lark.Client({ httpInstance: http as unknown as NonNullable<ConstructorParameters<typeof lark.Client>[0]['httpInstance']>, appId: app.appId, appSecret: app.appSecret, domain: app.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu, logger: { debug() {}, info() {}, warn() {}, error() {}, trace() {} } })); }
+    const http = createLarkHttp();
+    for (const app of apps) this.clients.set(app.appId, new lark.Client({ httpInstance: http, appId: app.appId, appSecret: app.appSecret, domain: app.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu, logger: silentLarkLogger })); }
   async reply(appId: string, messageId: string, text: string, idempotencyKey: string): Promise<void> {
     const client = this.clients.get(appId); if (!client) throw new BridgeError('unknown_app');
     const result = await client.im.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text }), msg_type: 'text', uuid: idempotencyKey } });

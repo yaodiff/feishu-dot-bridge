@@ -1,5 +1,5 @@
 export interface Principal { id: string; expiresAt: number }
-export interface FeishuApp { appId: string; appSecret: string; tenantKey: string; encryptKey: string; verificationToken: string; domain: 'feishu' | 'lark' }
+export interface FeishuApp { appId: string; appSecret: string; tenantKey: string; encryptKey: string; verificationToken: string; domain: 'feishu' | 'lark'; ingress?: 'webhook' | 'websocket'; websocketExclusiveConsumer?: boolean }
 export interface Identity { appId: string; tenantKey: string; openId: string }
 export interface Inbound extends Identity { messageId: string; chatId: string; text: string; timestamp: string }
 export interface Binding extends Identity { id: string; owner: string; active: number; chatId: string }

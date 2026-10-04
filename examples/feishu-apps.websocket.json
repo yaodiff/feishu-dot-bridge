@@ -1,0 +1,10 @@
+[
+  {
+    "appId": "cli_0000000000000000",
+    "tenantKey": "REPLACE_WITH_VERIFIED_TENANT_KEY",
+    "appSecretEnv": "FEISHU_APP_SECRET",
+    "domain": "feishu",
+    "ingress": "websocket",
+    "websocketExclusiveConsumer": false
+  }
+]
