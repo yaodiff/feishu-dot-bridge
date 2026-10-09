@@ -27,7 +27,7 @@ test('Feishu verifies raw-byte signature, timestamp, encrypted body, token, app 
   for (const payload of [feishuPayload('x', { appId: 'cli_evil' }), feishuPayload('x', { tenant: 'tenant_other' })]) { const bad = encryptedCallback(payload); assert.throws(() => decodeFeishu(mockApp, bad.raw, new Headers(bad.headers)), /identity/); }
   const badToken = feishuPayload(); badToken.header.token = 'wrong'; const bad = encryptedCallback(badToken); assert.throws(() => decodeFeishu(mockApp, bad.raw, new Headers(bad.headers)), /identity/);
 });
-test('bot/system messages, groups and non-text never enter binding or event pipeline', () => {
-  for (const extras of [{ sender: 'bot' }, { sender: 'system' }, { chatType: 'group' }, { type: 'audio' }]) { const c = encryptedCallback(feishuPayload('/bind could-be-a-code', extras)); assert.deepEqual(decodeFeishu(mockApp, c.raw, new Headers(c.headers)), { ignored: true }); }
+test('bot/system messages and groups never enter binding or event pipeline', () => {
+  for (const extras of [{ sender: 'bot' }, { sender: 'system' }, { chatType: 'group' }]) { const c = encryptedCallback(feishuPayload('/bind could-be-a-code', extras)); assert.deepEqual(decodeFeishu(mockApp, c.raw, new Headers(c.headers)), { ignored: true }); }
 });
 test('encrypted challenge requires verification token', () => { const c = encryptedCallback({ type: 'url_verification', token: mockApp.verificationToken, challenge: 'challenge' }); assert.deepEqual(decodeFeishu(mockApp, c.raw, new Headers(c.headers)), { challenge: 'challenge' }); });

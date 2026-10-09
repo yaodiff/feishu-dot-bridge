@@ -12,3 +12,25 @@ config
 *.key
 *.zip
 *.tgz
+
+# Never send local identities, transient metadata or Python caches as build context.
+deployment.local.json
+*.ready.json
+cutover-ready.json
+tunnel-id
+tunnel-health-url
+__pycache__
+*.pyc
+*.p12
+
+# Local development material is never part of Git, packages, or images.
+.private/
+**/.private/
+private-local/
+**/private-local/
+.npm/
+.cache/
+*.receipt.json
+*.status.jsonl
+*_MANIFEST.json
+*_VERIFICATION.json

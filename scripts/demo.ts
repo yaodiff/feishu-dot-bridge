@@ -1,18 +1,13 @@
-/** Offline MOCK integration demonstration. This is NOT a real dot or Feishu session. */
-import { fixture } from '../test/fixtures.js';
-const f = fixture();
+/** OFFLINE MOCK: two completely independent personal installations, not shared hosting. */
+import { personalFixture, MOCK_TOKEN_A, MOCK_TOKEN_B } from '../test/personal-fixtures.js';
+const installs=[personalFixture('MOCK_personal_host_A',MOCK_TOKEN_A),personalFixture('MOCK_personal_host_B',MOCK_TOKEN_B)];
 try {
-  f.bind(); f.bind(f.bob, { openId: 'ou_bob', chatId: 'oc_bob' });
-  await f.subscribe(); await f.subscribe(f.bob);
-  f.bridge.receive(f.message({ text: '你好，我是 Alice' }));
-  f.bridge.receive(f.message({ messageId: 'om_bob', openId: 'ou_bob', chatId: 'oc_bob', text: '你好，我是 Bob' }));
-  await f.bridge.pump();
-  for (const c of f.calls.filter(c => c.body.eventId)) {
-    const owner = c.url.endsWith('alice') ? f.alice : f.bob;
-    f.bridge.reply(owner, { event_id: c.body.eventId, text: `[MOCK dot] 收到 ${owner === f.alice ? 'Alice' : 'Bob'} 的消息` });
+  for(const [index,f] of installs.entries()) {
+    const pair=f.bridge.beginBinding(f.owner);f.bridge.receive(f.message({messageId:'pair',text:pair.command}));const binding=f.store.binding(f.owner.id)!;
+    await f.bridge.subscribe(f.owner,{name:'feishu.message.created',arguments:{binding_id:binding.id},delivery:{mode:'webhook',url:`https://callback.example/MOCK-installation-${index}`,secret:f.secret},cursor:null});
+    f.bridge.receive(f.message({text:`MOCK message on independent host ${index+1}`}));await f.bridge.pump();const eventId=f.calls.find(c=>c.body.eventId)!.body.eventId;
+    f.bridge.reply(f.owner,{event_id:eventId,text:'MOCK personal dot reply'});await f.bridge.pump();
+    console.log(JSON.stringify({installation:index+1,independent_database:true,events:f.calls.filter(c=>c.body.eventId).length,replies:f.sent.length}));
   }
-  await f.bridge.pump();
-  console.log('MOCK ONLY: 2 independent users bound, 2 signed events delivered, 2 replies routed');
-  for (const s of f.sent) console.log(JSON.stringify({ original_message: s.messageId, mock_reply: s.text }));
-  console.log('No real credentials, Feishu API, ChatGPT account, or network connection was used.');
-} finally { f.store.close(); }
+  console.log('MOCK ONLY: independent personal hosts; no real keys, Tunnel, Feishu or dot connection.');
+} finally {for(const f of installs)f.store.close();}

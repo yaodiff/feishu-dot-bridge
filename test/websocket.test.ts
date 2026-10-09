@@ -38,7 +38,7 @@ test('WS mapping requires trusted app/tenant identity, event type, sender and DM
   for (const bad of [flattened('x', { appId: 'cli_spoof' }), flattened('x', { tenant: 'other_tenant' }), { ...flattened(), app_id: undefined }, { ...flattened(), tenant_key: undefined }, { ...flattened(), event_type: 'card.action.trigger' }]) assert.throws(() => decodeFeishuWebSocket(wsApp, bad));
   const badSender = flattened(); badSender.sender.tenant_key = 'other_tenant'; assert.throws(() => decodeFeishuWebSocket(wsApp, badSender), /identity/);
   assert.throws(() => decodeFeishuWebSocket(mockApp, flattened()), /wrong_feishu_transport/);
-  for (const overrides of [{ sender: 'bot' }, { sender: 'system' }, { chatType: 'group' }, { type: 'audio' }]) assert.deepEqual(decodeFeishuWebSocket(wsApp, flattened('x', overrides)), { ignored: true });
+  for (const overrides of [{ sender: 'bot' }, { sender: 'system' }, { chatType: 'group' }]) assert.deepEqual(decodeFeishuWebSocket(wsApp, flattened('x', overrides)), { ignored: true });
   const stale = flattened(); stale.message.create_time = String(Date.now() - 25 * 3600000); assert.deepEqual(decodeFeishuWebSocket(wsApp, stale), { ignored: true });
 });
 
@@ -59,7 +59,7 @@ test('WS SDK dispatcher feeds the existing binding/inbox/dedupe/outbox without H
 });
 
 test('WS plaintext cannot be posted through HTTP, even with a matching app path', async () => {
-  const f = fixture(); const app = makeApp({ publicUrl: 'https://bridge.example', issuer: 'https://idp.example', apps: [wsApp], allowedOrigins: [] }, f.bridge, { async authenticate() { return f.alice; } });
+  const f = fixture(); const app = makeApp({ authMode: 'oauth', publicUrl: 'https://bridge.example', issuer: 'https://idp.example', apps: [wsApp], allowedOrigins: [] }, f.bridge, { async authenticate() { return f.alice; } });
   try {
     const response = await app(new Request(`https://bridge.example/feishu/events/${wsApp.appId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rawPayload('/bind spoof')) }));
     assert.equal(response.status, 404); assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM receipts').get()!.n, 0);

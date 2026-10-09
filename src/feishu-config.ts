@@ -26,3 +26,9 @@ export function loadFeishuApps(raw: unknown, secret: (name: string) => string): 
     verificationToken: a.ingress === 'webhook' ? secret(a.verificationTokenEnv!) : ''
   }));
 }
+
+/** One person's installation uses a single object, never an account/app array. */
+export function loadPersonalFeishuApp(raw: unknown, secret: (name: string) => string): FeishuApp {
+  if (Array.isArray(raw)) throw new Error('Personal configuration requires exactly one app object, not an array');
+  return loadFeishuApps([raw], secret)[0]!;
+}

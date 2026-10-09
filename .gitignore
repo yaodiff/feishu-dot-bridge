@@ -15,3 +15,22 @@ coverage/
 *.p12
 *.zip
 *.tgz
+
+# Per-installation expectations and transient UI metadata are never source.
+deployment.local.json
+*.ready.json
+cutover-ready.json
+tunnel-id
+tunnel-health-url
+__pycache__/
+*.pyc
+
+# Local development material is never part of Git, packages, or images.
+.private/
+private-local/
+.npm/
+.cache/
+*.receipt.json
+*.status.jsonl
+*_MANIFEST.json
+*_VERIFICATION.json

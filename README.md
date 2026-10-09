@@ -1,110 +1,80 @@
-# Feishu ↔ dot Bridge
+# Feishu ↔ 我的 dot
 
-让不同用户把自己的飞书私聊，安全地绑定到各自现有的 personal dot。
+把自己的飞书机器人私聊接到已有的 dot。每个人在自己的主机上运行一套 bridge，使用自己的飞书应用、私有数据库和官方 OpenAI Tunnel；不提供统一托管或公开注册服务。
 
-**状态：可运行的实验性开源 MVP。** 已完成本地 MOCK 集成与安全回归测试，尚未完成真实飞书 + ChatGPT/dot 的端到端验收。不是官方 OpenAI 或飞书项目，不应直接当作已审计的生产服务。源码采用 [MIT 许可](LICENSE)；使用时请遵守许可及依赖义务。
-
-[English summary](README.en.md) · [部署](docs/DEPLOYMENT.md) · [安全边界](SECURITY.md) · [协议与证据](docs/PROTOCOL.md) · [上线验收](docs/ACCEPTANCE.md)
-
-## 它如何工作
-
-1. 每个人在自己的 dot 中连接本服务的 OAuth 插件账号
-2. dot 调用 `begin_binding`，用户把一次性 `/bind …` 命令发到飞书机器人私聊
-3. 桥接器用飞书验证过的 `(app_id, tenant_key, open_id)` 与 OAuth 的 `(issuer, subject)` 建立一对一关系
-4. 用户让自己的 dot 订阅 `feishu.message.created`，并明确批准如何回复
-5. 飞书文字消息经过持久化队列，通过 **MCP Events** 发给该 dot 所在订阅
-6. dot 调用 `reply_to_feishu`，服务只能回复该账号收到的原始消息，不能任意指定收件人
-
-这是事件订阅 + MCP 工具回传，不依赖假想的 “dot chat REST API”，也不启动另一个模型冒充用户原来的 dot。处理节奏由 dot 决定，不保证即时对话延迟。
+[English](README.en.md) · [个人部署](docs/DEPLOYMENT.md) · [安全](SECURITY.md) · [验收清单](docs/ACCEPTANCE.md)
 
 ## 当前支持
 
-- 多用户各自绑定、各自订阅、各自回复；每个 OAuth 账号一条有效绑定，每条绑定一个有效订阅
-- 多个显式配置的飞书/Lark **企业自建应用**；每个 app ID 固定一个已核实的 tenant key
-- MVP 只处理用户发给机器人的 **p2p 文字消息**
-- 官方 MCP v2 SDK `@modelcontextprotocol/server@2.3.0`，协议 `2026-07-28`
-- 外部 OAuth2.1 身份提供商，JWT/JWKS 验证，scope `bridge:use`
-- 飞书入站可选加密签名 webhook（默认）或官方 SDK WebSocket；两者都校验 tenant/app，忽略机器人与群消息
-- SQLite 持久化绑定、收件箱、订阅、发件队列；`message_id` 去重，按队列保持投递顺序，有限重试
-- Standard Webhooks 签名与 challenge；callback HTTPS、明确主机白名单、公共 IP 校验、连接时 DNS 固定、拒绝重定向
-- 取消绑定会取消未开始的任务；只读 `delivery_status` 区分 pending/sent/dead/uncertain
+- 一套安装、一个固定主人、一个飞书 app/tenant、一个当前私聊绑定和一条有效事件订阅
+- 官方飞书 SDK WebSocket 入站、一次性私聊配对、认证 MCP 工具和签名事件回调
+- 普通文字与富文本帖子的有界纯文字展开；富文本中的链接不会自动访问，相同 `content_v2` 副本不会重复显示
+- 本人事件恢复读取、固定原消息回复，以及经授权向当前绑定私聊发送带来源标签的 ChatGPT 文字副本
+- 持久化 inbox/outbox、消息去重、有限重试、明确的 `pending` / `sent` / `uncertain` 状态，以及启发式敏感凭据文字省略
+- 默认关闭的 PNG/JPEG 图片输入；开启后可读取新图片及富文本中最多四张内嵌图片，经过本地解码、去元数据和重编码
+- 显式受控代理模式、callback 连接池和离线维护命令
 
-**不包含：** 飞书应用商店 ISV 安装授权/跨企业 token 管理、群聊映射、文件/图片/卡片、音频转写、原生实时语音通话、公开账号管理后台、多副本 worker、高可用数据库、完整监控和自动化 IdP 撤销通知。`AudioAdapter` 只是未来扩展接口，没有启用音频功能。
+默认文字模式提供 9 个 MCP 工具。`FEISHU_MEDIA_INPUT=images-v1` 增加 `get_event_image`，可使用 1 起始的 `image_index` 选择内嵌图片。音频、语音转写、模型运行时和媒体发送均不包含在本项目中。
 
-## 五分钟跑本地演示
+## 实验性状态与宿主要求
 
-需要 Node.js 24+ 和 npm。
+短时实网测试已观察到普通文字双向流转及事件恢复读取；这不是 24/7 可靠性认证。持续事件唤醒、实际宿主图片摄取、真实 callback 连接复用收益、重启恢复和每个账号的产品兼容性仍需逐安装验收。`sent` 表示对端 API 接受，不证明客户端显示或已读；callback 2xx 也不证明 dot 已处理。
 
-```bash
+选择能长期运行的主机，提供持久磁盘、出站 HTTPS 与 WebSocket、进程监管、私密备份及容量/故障告警。每个数据库只能有一个 bridge 进程；同一飞书应用必须只有一个事件消费者，或把桥接逻辑整合进原消费者。[OpenAI 官方宿主指南](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels#choose-where-to-run-tunnel-client)要求 Tunnel 客户端位于可访问私有 MCP 的信任边界内，并列出 VM/systemd 与 Kubernetes 等部署方式。
+
+2026 年 10 月 8–9 日的开发测试曾观察到 dot 云端会话消失和网络策略拒绝。这些是当时环境的已观察约束，不代表所有 dot 云端环境永久无法承载服务，也不构成长期开机或磁盘持久性的保证。
+
+仅使用飞书 WebSocket 收信不需要公开 HTTPS 飞书事件回调；普通 Feishu API 调用仍需要相应凭据、权限和出站连通性。MCP Tunnel、公开 MCP 和 OAuth 的访问要求各自独立，见[部署指南](docs/DEPLOYMENT.md)。
+
+## 快速检查
+
+文字运行时需要 POSIX 主机（Linux/macOS）、Node.js 24+ 和 npm。图片运行时另外要求 Linux `/usr/bin/prlimit` 及锁定版本 `sharp` 0.35.5；预检不通过会停止，不回退到无资源限制的解码。
+
+```sh
 npm ci --ignore-scripts
 npm test
 npm run demo
 ```
 
-演示完全离线，使用明确标为 `MOCK` 的 dot 接收器和飞书发送器，不需要 API Key，不会访问真实账号或发送消息。31 项测试覆盖多用户路由、绑定、越权、JWT、SSRF、飞书签名、重放、轮换、取消、持久化和实际 MCP2 HTTP 契约；以当前 `npm test` 输出为准。
+完整测试套件还需要 Linux、`/usr/bin/prlimit`、`openssl` 和 `mkfifo`（包括图片/维护/传输测试）；macOS 文字运行时支持不代表完整测试可在 macOS 执行。
 
-## 运行真实服务需要什么
+演示使用独立临时实例、合成密钥和明确标记的模拟服务；测试中的 TCP/TLS 服务仅在本机 loopback 上运行，不连接真实飞书或 dot。测试不等于实网验收。
 
-```bash
-cp .env.example .env
-mkdir -p config
-cp examples/feishu-apps.json config/feishu-apps.json
-# 编辑本地配置；生成 STORAGE_KEY；通过秘密管理器提供真实密钥
-npm ci --ignore-scripts
-npm run build
-node --env-file=.env dist/src/main.js
+## 在自己的主机安装
+
+```sh
+npm run init:personal
 ```
 
-启动会拒绝缺失配置。没有 “跳过 OAuth” 或 “生产 mock mode” 开关。
+主动运行此命令会生成私有 `.env`、单应用配置、固定安装 ID 和随机密钥；发现已有 `.env`、`config` 或 `data` 时拒绝覆盖。然后：
 
-你还需要自行准备：
+1. 在本机填写已核实的飞书 app/tenant 和现有 App Secret，确认唯一消费者后再启用 `websocketExclusiveConsumer`
+2. 启动 `node --env-file=.env dist/src/main.js`，保持精确 loopback 监听
+3. 按[个人部署指南](docs/DEPLOYMENT.md)配置本人专属官方 Tunnel，转发到 `http://127.0.0.1:3000/mcp` 并注入本地 `X-Bridge-Token`
+4. 在已有 dot 中连接、检查工具目录、完成私聊配对，再明确授权事件订阅及回复/镜像范围
 
-- 一个域名、可信 HTTPS 与持久化磁盘
-- 已开启机器人的飞书企业自建应用，以及事件订阅和最小消息权限（webhook 模式另需加密密钥）
-- 能完成 ChatGPT OAuth2.1 连接的身份提供商；本项目是资源服务器，不是 OAuth 授权服务器
-- 支持 MCP Events 的 dot/工作区权限，手动配置并连接本 MCP 插件
-- 来自实际 ChatGPT 订阅的 callback 主机名白名单；不要填猜测地址或 `*`
+连接界面选择 “None” 仅表示不另走 OAuth。后端始终校验本机密钥；任何能使用这条 Tunnel 的人都会被视为安装主人。必须核实仅本人可用，不能分享为公共或多人插件。初始化不会创建 Tunnel、飞书应用、OAuth grant 或平台权限。
 
-完整步骤与配置说明见 [部署指南](docs/DEPLOYMENT.md)。不要把 ChatGPT 密码、会话 cookie、OpenAI API Key 或飞书 App Secret 发到聊天里。
+## 安全与运维边界
 
-## 已有飞书应用使用长连接？
+- 个人模式只监听 `127.0.0.1` 或 `::1`，无默认密钥或跳过认证开关；[OAuth 兼容模式](docs/OAUTH_COMPATIBILITY.md)需显式选择
+- `INSTALLATION_ID` 决定固定主人；静态密钥不自动每小时过期，单次内部授权/订阅租期最多一小时
+- 敏感凭据文字检测可能漏报或误报；图片去元数据不检测画面中的秘密，也不授权披露敏感内容
+- SQLite 中的消息正文未做应用层加密。保护主机、私有文件、持久卷和备份；不要把生产秘密、消息或数据库放进仓库
+- `.private/` 的忽略规则仅帮助避免误提交，不是加密，也不会清除已跟踪文件或 Git 历史
+- schema v2 升级前取得一致备份。保留投递状态并优先修复升级后的代码，不要把旧二进制直接指向新数据库
+- `uncertain` 必须先核对目的端，不盲目重发。解绑不能撤回已发送请求，且没有跨平台 exactly-once 保证
+- [Linux 离线维护](docs/OFFLINE_MAINTENANCE.md)仅清理符合条件的旧收件历史；保留全部回执去重键和镜像行/正文，不是完整 30 天删除或隐私擦除
 
-可为该应用显式设置 `ingress: "websocket"`，继续使用官方 Node SDK 长连接接收消息，无需改成 HTTP 回调，也不修改飞书应用的安全设置。示例见 [WebSocket 配置](examples/feishu-apps.websocket.json) 和 [部署指南](docs/DEPLOYMENT.md#websocket-长连接入站)。未设置 ingress 时保持原来的 webhook 模式。
+不支持群聊路由、ISV 分发、原生用户气泡复制、编辑/删除/已读同步、历史回填、全媒体镜像或多副本高可用。本项目也不提供 ChatGPT 原生消息捕获、通用启动器或持续会话监管；调用方需通过其支持的工具和明确授权完成文字镜像。
 
-**先确认消费者归属：** 同 app 多条长连接按集群分发，不是广播。已有消费者仍在运行时，不要启动第二条桥接连接。应用如果同时承担其他事件/卡片功能，应把导出的文字消息处理器与原 `im.message.receive_v1` handler 组合执行，并保留所有其它处理器；直接再次 register 同一事件会覆盖原handler。只有确认本服务是该 app 的唯一消费者且其它事件无需它处理时，才可设置 `websocketExclusiveConsumer: true`；示例默认 false，会拒绝启动。
+## 文档
 
-WS 只替换飞书入站，MCP 的公网 HTTPS、OAuth 和 dot 订阅仍然需要配置。当前 WS 握手、真实收发和其它事件共存没有完成实网验收。
+- [本人事件读取](docs/OWNED_EVENT_READS.md)与[文字镜像](docs/TEXT_MIRROR_V1.md)
+- [图片输入](docs/MEDIA_INPUT_CANDIDATE.md)与[富文本帖子](docs/RICH_POST_INPUT.md)
+- [Callback 受控代理](docs/CLOUD_PROXY_CANDIDATE.md)、[连接池](docs/CALLBACK_POOL_CANDIDATE.md)与[飞书受控代理](docs/FEISHU_MANAGED_PROXY.md)
+- [协议与信任边界](docs/PROTOCOL.md)、[验收](docs/ACCEPTANCE.md)与[维护](docs/OFFLINE_MAINTENANCE.md)
 
-## 用户配对步骤
+## 许可证
 
-1. 在自己的 dot 中连接此插件，用自己的桥接账号完成 OAuth
-2. 对 dot 说：“帮我绑定飞书，生成配对命令”
-3. 只在目标飞书机器人私聊粘贴 dot 给出的命令；5 分钟内有效，一次使用，不要转发
-4. 回到 dot 说：“检查我的飞书绑定状态”。MVP 不自动向飞书发送配对确认消息
-5. 对 dot 说：“订阅我已绑定飞书的文字消息，并按我的要求通过原会话回复”。由你决定回复范围；敏感行动仍需要相应确认
-6. 发一条非敏感测试消息，确认原来的 dot 收到事件，再检查飞书回复及 `delivery_status`
-
-更换绑定应先请求 `unlink_binding`。同一个飞书身份不能被另一账号抢占。绑定码泄漏可能导致错误配对，应立即停止使用该码并在 dot 重新生成。
-
-## MCP 接口
-
-- POST `/mcp`：工具与事件方法，共用 OAuth 认证；只接受现代 MCP2 请求
-- GET `/.well-known/oauth-protected-resource/mcp`：OAuth 资源元数据
-- POST `/feishu/events/<appId>`：仅 webhook 应用的飞书加密事件；WebSocket 应用此路由返回404
-- GET `/healthz`：仅进程健康，不代表外部服务已连通
-
-工具：`begin_binding`、`binding_status`、`unlink_binding`、`reply_to_feishu`、`delivery_status`
-
-事件：`feishu.message.created`，订阅参数 `{ "binding_id": "..." }`
-
-## 可靠性说明
-
-`pending` 只表示入队，`sent` 表示对端已接受；dot callback 的 2xx 不代表 dot 已完成回复。消息采用至少一次投递，不能保证跨服务绝对 exactly-once。Feishu 回复使用稳定 uuid，并在首次发送 55 分钟后停止自动重试，防止超出上游去重窗口后盲目重发；`uncertain` 必须人工核实。
-
-只支持单进程/单 worker 使用一个数据库，不能启动多个副本。队列保持每个订阅的投递顺序，以及回复入队顺序；不承诺 dot 异步任务完成顺序。事件没有协议级历史 replay（cursor 为 null），未订阅或订阅已过期时的消息不会在以后补推。
-
-## 贡献与发布
-
-先跑 `npm test`、`npm run demo`，遵循 [贡献说明](CONTRIBUTING.md)。仓库已提供 GitHub Actions 和 Docker 配置。公开源码不代表服务已部署或完成真实账号联调。仓库不包含真实账号密钥。
-
-投入真实使用前请完成 [验收清单](docs/ACCEPTANCE.md)，并保留 [MIT 许可](LICENSE) 要求的版权及许可声明。
+项目源码采用 [MIT](LICENSE)。图片依赖 `sharp` 使用 [Apache-2.0](https://github.com/lovell/sharp/blob/main/LICENSE)，上游 libvips 使用 [LGPL-2.1-or-later](https://github.com/libvips/libvips/blob/master/LICENSE)。这不等于预编译包的整体许可证：[锁文件](package-lock.json)中的 `@img/sharp-libvips-linux-x64` 1.3.4 声明为 `LGPL-3.0-or-later`，其他平台包也有各自或组合许可证，须以实际安装包的声明和 notices 为准。分发预装依赖、容器或其他二进制产物前，核对实际包含的第三方组件、许可证、声明及适用的源码/再链接义务；不能把整个二进制包视为仅 MIT。源码仓库不捆绑这些原生二进制。

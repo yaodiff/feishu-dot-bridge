@@ -2,8 +2,10 @@ services:
   bridge:
     build: .
     restart: unless-stopped
-    env_file: .env
+    # Explicit OAuth-only template; never use this recipe to expose personal mode.
+    env_file: .env.oauth
     environment:
+      AUTH_MODE: oauth
       HOST: 0.0.0.0
       DATABASE_PATH: /data/bridge.sqlite
       FEISHU_APPS_FILE: /config/feishu-apps.json
