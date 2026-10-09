@@ -1,6 +1,7 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { createLarkHttp, decodeFeishuWebSocket, silentLarkLogger } from './feishu.js';
 import { BridgeError, type FeishuApp, type Inbound } from './types.js';
+import type { FeishuNetwork } from './feishu-network.js';
 
 export interface WebSocketClient {
   start(options: { eventDispatcher: lark.EventDispatcher }): Promise<void>;
@@ -16,12 +17,12 @@ const appKey = (app: FeishuApp) => app.appId;
 /** For integration into an existing official SDK dispatcher. The owner of that
  * dispatcher MUST authenticate the app's connection and preserve other handlers.
  * This is not a network endpoint and does not authenticate arbitrary JSON. */
-export function authenticatedWebSocketMessageHandler(app: FeishuApp, receive: (message: Inbound) => unknown, options: { active?: () => boolean; notice?: (event: WebSocketNotice) => void } = {}) {
+export function authenticatedWebSocketMessageHandler(app: FeishuApp, receive: (message: Inbound) => unknown, options: { active?: () => boolean; notice?: (event: WebSocketNotice) => void; mediaEnabled?: boolean } = {}) {
   const notice = (event: WebSocketNotice) => { try { options.notice?.(event); } catch { /* Instrumentation must not change acknowledgement semantics. */ } };
   return async (data: unknown): Promise<void> => {
     if (options.active && !options.active()) return;
     let result;
-    try { result = decodeFeishuWebSocket(app, data); }
+    try { result = decodeFeishuWebSocket(app, data, Date.now(), options.mediaEnabled); }
     catch { notice('ws_event_rejected'); return; }
     if ('message' in result) {
       try { await receive(result.message); } // Persist + enqueue only; never wait for an outbound API here.
@@ -29,9 +30,9 @@ export function authenticatedWebSocketMessageHandler(app: FeishuApp, receive: (m
     }
   };
 }
-const productionFactory: WebSocketFactory = (app, hooks) => new lark.WSClient({
+const productionFactory = (network?: FeishuNetwork): WebSocketFactory => (app, hooks) => new lark.WSClient({
   appId: app.appId, appSecret: app.appSecret, domain: app.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
-  httpInstance: createLarkHttp(), logger: silentLarkLogger, autoReconnect: true, handshakeTimeoutMs: 10000,
+  httpInstance: createLarkHttp(network), ...(network ? { agent: network.wsAgent } : {}), logger: silentLarkLogger, autoReconnect: true, handshakeTimeoutMs: network ? 15000 : 10000,
   wsConfig: { pingTimeout: 30 }, onReady: hooks.ready, onError: () => hooks.failed(),
   onReconnecting: hooks.reconnecting, onReconnected: hooks.reconnected
 });
@@ -46,7 +47,7 @@ export class FeishuWebSocketIngress {
   private started = false;
   private startupFailed = false;
   private rejectStartup?: (error: Error) => void;
-  constructor(private apps: FeishuApp[], private receive: (message: Inbound) => unknown, private options: { factory?: WebSocketFactory; notice?: (event: WebSocketNotice) => void; startupTimeoutMs?: number; onTerminalFailure?: () => void } = {}) {}
+  constructor(private apps: FeishuApp[], private receive: (message: Inbound) => unknown, private options: { factory?: WebSocketFactory; network?: FeishuNetwork; notice?: (event: WebSocketNotice) => void; startupTimeoutMs?: number; onTerminalFailure?: () => void; mediaEnabled?: boolean } = {}) {}
   private notify(event: WebSocketNotice): void { try { this.options.notice?.(event); } catch { /* Logs cannot alter lifecycle cleanup. */ } }
   start(): Promise<void> {
     if (this.stopped) return Promise.reject(new BridgeError('ws_ingress_stopped'));
@@ -89,13 +90,13 @@ export class FeishuWebSocketIngress {
         reconnecting: () => { if (!this.stopped) notice('ws_reconnecting'); },
         reconnected: () => { if (!this.stopped && !this.startupFailed) { entry.ready = true; notice('ws_reconnected'); } }
       };
-      const factory = this.options.factory ?? productionFactory;
+      const factory = this.options.factory ?? productionFactory(this.options.network);
       try {
         entry.client = factory(entry.app, hooks);
         const dispatcher = new lark.EventDispatcher({ logger: silentLarkLogger }).register({
-          'im.message.receive_v1': authenticatedWebSocketMessageHandler(entry.app, this.receive, { active: () => !this.stopped && entry.ready, notice })
+          'im.message.receive_v1': authenticatedWebSocketMessageHandler(entry.app, this.receive, { active: () => !this.stopped && entry.ready, notice, mediaEnabled: this.options.mediaEnabled })
         });
-        entry.timer = setTimeout(() => reject(new BridgeError('ws_start_timeout')), this.options.startupTimeoutMs ?? 15000);
+        entry.timer = setTimeout(() => reject(new BridgeError('ws_start_timeout')), this.options.startupTimeoutMs ?? this.options.network?.startupTimeoutMs ?? 15000);
         notice('ws_connecting');
         // SDK start() returns before authentication/handshake readiness. Only onReady resolves us.
         void entry.client.start({ eventDispatcher: dispatcher }).catch(fail);

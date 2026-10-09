@@ -1,33 +1,70 @@
-# Feishu ↔ personal dot bridge
+# Feishu ↔ your dot
 
-Experimental self-hosted TypeScript MVP connecting each user's Feishu DM to their **existing personal dot** through authenticated MCP Events and a reply tool. Not an official OpenAI/Feishu project; not production-audited or live end-to-end verified.
+Connect your own Feishu bot's private chat to your existing dot. Run one bridge per person on a host you control, with your own Feishu app, private database and official OpenAI Tunnel. This repository does not operate a hosted service or public signup platform.
 
-## Quick start
+[中文](README.md) · [Deployment](docs/DEPLOYMENT.md) · [Security](SECURITY.md) · [Acceptance checklist](docs/ACCEPTANCE.md)
+
+## Features
+
+- One installation, fixed owner, Feishu app/tenant, current paired DM and active event subscription
+- Official SDK WebSocket ingress, one-use pairing, authenticated MCP tools and signed event callbacks
+- Ordinary text and bounded rich-post flattening, including duplicate `content_v2` alias suppression; links remain text and are never automatically visited
+- Owner-scoped event recovery reads, replies to the original message and authorized, source-labeled ChatGPT text copies to the current bound DM
+- Durable inbox/outbox, deduplication, bounded retries, explicit delivery states and a heuristic credential-text omission gate
+- Opt-in PNG/JPEG intake, including up to four embedded post images, locally decoded, stripped of metadata and re-encoded
+- Explicit managed-proxy transports, callback connection reuse and offline maintenance
+
+Text mode exposes 9 MCP tools. `FEISHU_MEDIA_INPUT=images-v1` adds `get_event_image`, with optional 1-based `image_index`. Audio, transcription, model runtimes and outbound media are not supported.
+
+## Experimental status and hosting
+
+Short live tests have observed ordinary text flowing in both directions and recovery reads. They do not certify 24/7 reliability. Each installation must validate sustained event handling, actual host image ingestion, real callback-pool benefit, restart recovery and account/product compatibility. `sent` means the remote API accepted a message, not that a client displayed or read it; callback 2xx does not prove dot processed it.
+
+Use a long-running host with persistent disk, outbound HTTPS and WebSocket access, process supervision, private backups and failure/capacity alerts. Run one bridge process per database and one consumer per Feishu app, or integrate into its existing consumer. The [official OpenAI hosting guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels#choose-where-to-run-tunnel-client) places the Tunnel client in the private MCP server's trust boundary and describes VM/systemd and Kubernetes deployments.
+
+Development tests on October 8–9, 2026 encountered disappearing dot cloud sessions and network-policy denials. These are observed constraints of those environments, not a universal permanent product limitation or a guarantee about long-running hosting or storage durability.
+
+Feishu WebSocket ingress alone needs no public HTTPS Feishu event callback. Feishu API calls still need credentials, permissions and outbound connectivity. Tunnel, public MCP and OAuth have separate access requirements; see [deployment](docs/DEPLOYMENT.md).
+
+## Quick check and setup
+
+Text runtime: POSIX host (Linux/macOS), Node.js 24+ and npm. Image runtime additionally requires Linux `/usr/bin/prlimit` and pinned `sharp` 0.35.5; missing decoder/resource limits fail startup without an unrestricted fallback.
 
 ```sh
 npm ci --ignore-scripts
 npm test
 npm run demo
+npm run init:personal
 ```
 
-Requires Node.js 24+. The demo and integration fixtures are MOCK ONLY and make no real account/network calls.
+The full test suite additionally requires Linux, `/usr/bin/prlimit`, `openssl` and `mkfifo`, including image, maintenance and transport checks. macOS text-runtime support does not imply full-suite support there.
 
-Each user authenticates this MCP resource server through an external OAuth2.1 identity provider. A short-lived, one-use pairing code is consumed only by a authenticated Feishu user DM (encrypted/signed webhook by default, or an explicit official-SDK WebSocket connection). The server binds OAuth issuer+subject to app+tenant+open_id. Each binding supports one active callback subscription. Text events route to that subscription; replies are restricted to the original stored message owned by that account.
+Tests/demo use synthetic credentials and simulated services, including loopback TCP/TLS fixtures; they do not contact real Feishu or dot accounts. Initialization runs only when requested, creates private configuration and unique keys, and refuses existing `.env`, `config` or `data`.
 
-Included: official MCP v2 SDK, protocol 2026-07-28, strict JWT/JWKS checks, encrypted Feishu callbacks or optional official-SDK WebSocket ingress, SQLite inbox/outbox, message-id deduplication, bounded retries, Standard Webhooks signing, HTTPS callback verification with DNS pinning/public-IP checks, owner-scoped delivery status, Docker and CI.
+1. Fill your verified Feishu app/tenant and existing App Secret locally; confirm exclusive event consumption before enabling `websocketExclusiveConsumer`
+2. Start `node --env-file=.env dist/src/main.js` on exact loopback
+3. Configure your owner-only official Tunnel to `http://127.0.0.1:3000/mcp` with a local `X-Bridge-Token` header, following [deployment](docs/DEPLOYMENT.md)
+4. Connect your existing dot, verify callable tools, pair in your bot DM, then authorize the subscription and reply/mirror scope
 
-Scope: multiple users and separately configured **self-built tenant apps**, one tenant per app ID. This is not a distributable ISV SaaS implementation. DMs/text only; no group routing or native realtime voice. Audio is an unimplemented adapter seam.
+UI authentication “None” means no separate OAuth flow. Backend authentication remains mandatory, and anyone who can use the Tunnel is treated as the installation owner. Never share this personal connection. Setup does not create a Tunnel, Feishu app, OAuth grant or platform permission.
 
-Real use requires public HTTPS, persistent storage, a suitable OAuth identity provider, Feishu app configuration, a ChatGPT plugin connection and MCP Events access. There is no secret/password/cookie-based shortcut to connecting someone else's dot. The repository does not implement an OAuth authorization server.
+## Safety and limits
 
-Read the Chinese-primary [deployment guide](docs/DEPLOYMENT.md), [security boundaries](SECURITY.md), [protocol references](docs/PROTOCOL.md), and [acceptance checklist](docs/ACCEPTANCE.md). Important limitations: one process per SQLite DB; no exactly-once guarantee; events have no history replay; delivery/order in the bridge does not imply dot completion; IdP revocation may take up to the JWT lifetime (max 1h).
+- Personal mode enforces `127.0.0.1` or `::1`; no default key or authentication bypass. [OAuth compatibility](docs/OAUTH_COMPATIBILITY.md) is explicit and optional
+- The installation ID fixes the owner. Static credentials do not expire hourly; request/subscription authorization leases last at most one hour
+- Text credential detection can miss secrets or flag ordinary text. Image sanitization cannot identify secrets in pixels or authorize sensitive disclosure
+- Database message bodies are not application-encrypted. Protect disks and backups; keep production secrets, messages and databases out of source control
+- Ignoring `.private/` is neither encryption nor removal of already tracked files or Git history
+- Back up consistently before schema v2 upgrades. Prefer a fix-forward that preserves delivery state; do not point older binaries at an upgraded database
+- Reconcile `uncertain` outcomes before retrying. Unlinking cannot recall in-flight sends, and cross-service exactly-once delivery is not promised
+- [Linux-only offline maintenance](docs/OFFLINE_MAINTENANCE.md) removes eligible old inbox history but retains all deduplication receipts and mirror rows/bodies. It is not full 30-day retention or privacy erasure
 
-Released under the [MIT license](LICENSE). Publishing the source does not imply a deployed service or verified real-account integration. No live credentials are included.
+No group routing, ISV distribution, native user-bubble copying, edit/delete/read synchronization, history backfill, full-media mirroring or multi-replica HA. No native ChatGPT message-capture hook, general launcher or session supervisor is supplied; callers must implement authorized text mirroring through their supported interfaces.
 
-## Optional WebSocket ingress
+## Further documentation
 
-Set per-app `ingress: "websocket"` to preserve an existing long-connection setup without changing app security settings. Webhook is still the default. WS authenticates the SDK connection; it does not invent an HTTP signature for plaintext event frames. Expected app/tenant and user/DM/text checks still apply, and the HTTP event route is disabled for WS apps.
+[Owned reads](docs/OWNED_EVENT_READS.md) · [Text mirroring](docs/TEXT_MIRROR_V1.md) · [Images](docs/MEDIA_INPUT_CANDIDATE.md) · [Rich posts](docs/RICH_POST_INPUT.md) · [Callback proxy](docs/CLOUD_PROXY_CANDIDATE.md) · [Callback pool](docs/CALLBACK_POOL_CANDIDATE.md) · [Feishu proxy](docs/FEISHU_MANAGED_PROXY.md) · [Protocol](docs/PROTOCOL.md)
 
-Feishu distributes events between concurrent connections for the same app. Confirm exclusive ownership before setting `websocketExclusiveConsumer: true`; the example deliberately defaults to false. If another consumer handles events/cards, compose `authenticatedWebSocketMessageHandler` with the existing `im.message.receive_v1` handler in that authenticated dispatcher and preserve all other handlers. Registering the same event key again without composition overwrites its old handler. This exported function does not authenticate arbitrary JSON and must never be exposed as an HTTP endpoint. The in-process duplicate guard cannot detect other hosts. Public MCP HTTPS, OAuth, and live acceptance remain required.
+## Licensing
 
-SDK reconnects handle transient disconnects only. A terminal SDK `onError` during startup rejects the aggregate startup, including apps that were previously ready. After startup, terminal failure closes every WS ingress and makes the main process shut down with a nonzero exit status; use an explicit process supervisor/restart policy rather than assuming a terminally failed client will reconnect itself.
+Project source is [MIT](LICENSE). `sharp` is [Apache-2.0](https://github.com/lovell/sharp/blob/main/LICENSE); upstream libvips is [LGPL-2.1-or-later](https://github.com/libvips/libvips/blob/master/LICENSE). Prebuilt packages have separate declarations: the [lockfile](package-lock.json) pins `@img/sharp-libvips-linux-x64` 1.3.4 as `LGPL-3.0-or-later`; other platform packages may use their own or composite license expressions. Follow the exact installed package declarations and notices. Before distributing installed dependencies, containers or other binary artifacts, review included third-party licenses, notices and applicable source/relinking obligations. The whole binary bundle is not MIT-only. Native dependency binaries are not bundled in this source repository.

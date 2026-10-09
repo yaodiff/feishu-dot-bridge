@@ -1,13 +1,16 @@
 {
   "name": "feishu-dot-bridge",
   "version": "0.1.0",
-  "description": "Experimental multi-user Feishu messaging bridge for personal dots via authenticated MCP Events",
+  "description": "Personal self-hosted Feishu bridge for your existing dot via authenticated MCP Events",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "node dist/src/main.js",
     "demo": "npm run build && node dist/scripts/demo.js",
-    "check": "npm test"
+    "check": "npm test",
+    "init:personal": "npm run build && node dist/scripts/init-personal.js",
+    "test:proxy-candidate": "npm run build && node --test dist/test/proxy-candidate.test.js",
+    "check:cloud-egress": "npm run build && node dist/scripts/check-cloud-egress.js"
   },
   "keywords": [],
   "license": "MIT",
@@ -19,7 +22,8 @@
     "ipaddr.js": "2.5.0",
     "jose": "6.2.12",
     "standardwebhooks": "1.1.1",
-    "zod": "4.6.5"
+    "zod": "4.6.5",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
@@ -28,5 +32,19 @@
   "private": true,
   "engines": {
     "node": ">=24.0.0"
-  }
+  },
+  "files": [
+    "dist/src/**",
+    "dist/scripts/**",
+    "docs/**",
+    "examples/**",
+    "README.md",
+    "README.en.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    ".env.example",
+    "Dockerfile",
+    "compose.yaml"
+  ]
 }
