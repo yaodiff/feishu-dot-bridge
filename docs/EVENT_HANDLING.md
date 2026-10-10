@@ -10,7 +10,7 @@ or invent a platform acknowledgement.
 
 Four authenticated tools use the existing protected MCP endpoint and recheck the
 complete current binding identity. No caller-selected owner or destination exists.
-The text catalog now has 13 tools; the unchanged image opt-in adds the 14th.
+The default catalog has 16 tools, including explicit status/output queries. Image input adds one tool; image output adds two separately enabled tools (17 input-only, 18 output-only, 19 with both). See [output delivery](OUTPUT_DELIVERY_CANDIDATE.md); statuses remain caller-submitted and do not approve dot permissions.
 
 - `get_event_handling({event_id})`: read metadata, decision/revision, lease,
   callback acceptance and actual direct or covering reply state. No message text,

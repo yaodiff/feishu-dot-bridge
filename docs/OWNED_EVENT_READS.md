@@ -24,7 +24,7 @@ Input: exactly `{ "event_id": "…" }` with a nonempty string of at most 256 cha
 
 Output: the same minimal event fields, plus `reply: { state, attempts }`. The same rolling 24-hour and complete active-binding scopes apply, but an existing reply job does not hide the event. `state` is `not_queued`, `pending`, `sending`, `sent`, `dead`, `cancelled` or `uncertain`; an unrecognized stored state is reported only as `unknown`. No reply payload, job ID, callback state, recipient identity, signature, token or credential is returned. `attempts` is a nonnegative safe integer. Unknown, expired, malformed-time, future-time, inaccessible and old-binding event IDs all return the identical `event_not_found` error. Schema-invalid requests return `invalid_request`.
 
-Both read tools reject expired/revoked authorization as `unauthorized` before cursor or event lookup. The read operations perform only SELECTs; they do not perform schema migration. Store initialization uses schema v4; see [event handling](EVENT_HANDLING.md). Existing event IDs and reply idempotence remain. The raw pending query may include waits or explicit no-reply decisions; inspect handling status before acting. Recorded decisions and live claim revisions now gate reply creation.
+Both read tools reject expired/revoked authorization as `unauthorized` before cursor or event lookup. The read operations perform only SELECTs; they do not perform schema migration. Store initialization uses schema v5; see [event handling](EVENT_HANDLING.md). Existing event IDs and reply idempotence remain. The raw pending query may include waits or explicit no-reply decisions; inspect handling status before acting. Recorded decisions and live claim revisions now gate reply creation.
 
 ## Default-off image metadata
 

@@ -40,20 +40,20 @@
         "tag": "div",
         "text": {
           "tag": "plain_text",
-          "content": "请打开 ChatGPT 中的 dot → Activity，检查对应请求并在原处确认。飞书点击只跳转，不授予 dot 权限。此状态由调用者提交。"
+          "content": "请打开 dot → Activity，检查对应请求并在原处确认。飞书点击只跳转，不授予 dot 权限。此状态由调用者提交。"
         }
       },
       {
         "tag": "button",
         "text": {
           "tag": "plain_text",
-          "content": "打开 ChatGPT · 查看 dot"
+          "content": "打开 dot"
         },
         "type": "primary",
         "behaviors": [
           {
             "type": "open_url",
-            "default_url": "https://chatgpt.com/"
+            "default_url": "https://chatgpt.com/dots/home"
           }
         ]
       }

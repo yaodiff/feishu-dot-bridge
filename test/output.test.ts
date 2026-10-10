@@ -49,7 +49,7 @@ test('waiting card has plain action/reason, official navigation only and no appr
  assert.throws(()=>f.output.card(f.alice,{...f.card('wait',0,'waiting_confirmation'),action:undefined}));
  const card=buildStatusCard(f.card('wait',0,'waiting_confirmation'));
  assert.match(card.header.title.content,/等待确认/);assert.match(card.config.summary.content,/等待确认/);
- const raw=JSON.stringify(card);assert.ok(raw.includes(DOT_ENTRY));assert.ok(raw.includes('不授予 dot 权限'));assert.equal(raw.includes('callback'),false);assert.equal(raw.includes('value'),false);
+ const raw=JSON.stringify(card);assert.equal(DOT_ENTRY,'https://chatgpt.com/dots/home');assert.ok(raw.includes(DOT_ENTRY));assert.ok(raw.includes('不授予 dot 权限'));assert.equal(raw.includes('callback'),false);assert.equal(raw.includes('value'),false);
  assert.throws(()=>f.output.card(f.alice,{...f.card('fake'),url:'https://attacker.invalid'}));
  assert.throws(()=>f.output.card(f.alice,{...f.card('secret'),summary:'Bearer abcdefghijklmnopqrstuvwxyz123456'}),code('credential_blocked'));
  }finally{f.store.close();}

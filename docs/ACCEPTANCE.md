@@ -11,7 +11,7 @@ October 8–9, 2026 development sessions encountered disappearing dot cloud sess
 - [ ] Personal listener remains exact loopback; missing, wrong, forged and overridden header credentials fail
 - [ ] Official Tunnel access is restricted to this owner; Tunnel runtime key and local bridge key are distinct and never logged
 - [ ] The actual account supports the selected Tunnel/authentication/MCP Events combination; no authentication is removed to work around a failure
-- [ ] All 13 default tools are callable; optional image mode adds `get_event_image` with its current schema, including `image_index`
+- [ ] All 16 default tools are callable; input adds `get_event_image` (17), output adds two staging/sending tools (18 output-only, 19 with both); verify actual schemas, including `image_index`
 - [ ] Verified Feishu app/tenant and minimum private-message permissions, with no competing consumer or overwritten existing handler
 - [ ] Real WS readiness, temporary disconnect, terminal failure, graceful shutdown and supervised restart are tested
 - [ ] Pairing admits only the intended owner's current DM; other users, bots and groups cannot route into it
@@ -22,7 +22,7 @@ October 8–9, 2026 development sessions encountered disappearing dot cloud sess
 - [ ] Delivery states are checked separately for Feishu and ChatGPT; no callback 2xx, queue acceptance or remote API acceptance is mislabeled as client display/read/processing
 - [ ] Authorized native ChatGPT user and assistant text each reach the current bound DM; source-labeled copies are not mirrored back as new inputs
 - [ ] Unsupported and suspected-credential notices are visible; false-positive/false-negative limits are understood
-- [ ] Private consistent backups, restore/reconciliation and schema v4 fix-forward are tested; one process owns the database
+- [ ] Private consistent backups, restore/reconciliation and schema v5 fix-forward are tested; one process owns the database
 - [ ] [Maintenance limits](OFFLINE_MAINTENANCE.md) are understood, including Linux-only operation and indefinite receipt/mirror retention
 
 ## Optional image and rich-post acceptance
@@ -68,3 +68,9 @@ availability or superiority to cloud hosting. The installation still depends
 on dot calling the send tool; alert reconciliation runs on a wake. No
 independent continuous automatic resend service was tested or installed.
 Do not replay older pending inputs already covered by subsequent replies.
+
+## Live explicit-output check (2026-10-10)
+
+The coordinating session reported one authorized live check using actual bytes rendered from an original repository flow diagram. The image upload and bound-DM message send were separately API-accepted, and the user confirmed the image was visible. A processing card was created, then completion PATCHed the same message; an explicitly labeled test waiting card was sent separately. The user confirmed its button opened the dot homepage. The button grants no permission; any actual approval must happen in the original dot request. A prior cancelled card call had no stored output reservation and was retried only after renewed human authorization. Final output alerts were empty. Private receipts, message/account identifiers and deployment configuration are intentionally omitted.
+
+These observations validate one explicit byte-handoff and card path. They do not prove every image format, card style or client, all-client rendering, read status, sustained reliability, or automatic capture of every dot reply/approval. Callers still submit and reconcile each authorized output. PNG/JPEG limits and the trusted artifact-adapter requirements remain mandatory.

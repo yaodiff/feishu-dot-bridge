@@ -14,7 +14,7 @@ export const statusCardSchema = z.object({ binding_id: id, request_id: id, task_
 export type StatusSubmission = z.infer<typeof statusCardSchema>;
 export const labels = { processing:'处理中', waiting_confirmation:'等待确认', completed:'完成', failed:'失败', blocked:'阻塞' };
 // Official product entry only; no guessed task/approval deep links or caller URL.
-export const DOT_ENTRY = 'https://chatgpt.com/';
+export const DOT_ENTRY = 'https://chatgpt.com/dots/home';
 export function buildStatusCard(a: StatusSubmission) {
   for (const value of [a.summary,a.action,a.reason]) if (value && classifyText(value) === 'credential') throw new BridgeError('credential_blocked');
   const label = labels[a.status];
@@ -22,8 +22,8 @@ export function buildStatusCard(a: StatusSubmission) {
   if (a.action) elements.push({ tag:'div', text:{ tag:'plain_text', content:'需要执行：' + a.action } });
   if (a.reason) elements.push({ tag:'div', text:{ tag:'plain_text', content:'原因：' + a.reason } });
   if (a.status === 'waiting_confirmation') {
-    elements.push({ tag:'div', text:{ tag:'plain_text', content:'请打开 ChatGPT 中的 dot → Activity，检查对应请求并在原处确认。飞书点击只跳转，不授予 dot 权限。此状态由调用者提交。' } });
-    elements.push({ tag:'button', text:{ tag:'plain_text', content:'打开 ChatGPT · 查看 dot' }, type:'primary', behaviors:[{ type:'open_url', default_url:DOT_ENTRY }] });
+    elements.push({ tag:'div', text:{ tag:'plain_text', content:'请打开 dot → Activity，检查对应请求并在原处确认。飞书点击只跳转，不授予 dot 权限。此状态由调用者提交。' } });
+    elements.push({ tag:'button', text:{ tag:'plain_text', content:'打开 dot' }, type:'primary', behaviors:[{ type:'open_url', default_url:DOT_ENTRY }] });
   }
   return { schema:'2.0', config:{ update_multi:true, summary:{ content:label + ' · ' + Array.from(a.summary).slice(0,80).join('') + (Array.from(a.summary).length>80 ? '…' : '') } },
     header:{ title:{ tag:'plain_text', content:'dot · ' + label }, template:a.status === 'completed' ? 'green' : ['failed','blocked'].includes(a.status) ? 'red' : a.status === 'waiting_confirmation' ? 'orange' : 'blue' }, body:{ elements } };
