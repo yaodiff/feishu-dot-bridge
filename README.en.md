@@ -33,6 +33,42 @@ Connect your own Feishu bot DM to the dot you already use. Send a question from 
 
 The default catalog has **16 MCP tools**, including status submission and output queries. `FEISHU_MEDIA_INPUT=images-v1` adds `get_event_image`; `FEISHU_IMAGE_OUTPUT=on` adds two image staging/sending tools. Input alone gives 17 tools, output alone 18, and both enabled 19. Input and output are separate opt-ins limited to bounded PNG/JPEG. Image processing, disclosure and status sends still require explicit authorization. Audio and transcription are unsupported. The bridge does not automatically capture every dot answer or approval; clicking a Feishu card does not approve dot permissions.
 
+## Architecture: two separate paths
+
+```text
+[A] Intake + notification (authorized subscription; not a reply)
+Feishu DM --WebSocket--> bridge --MCP Events / callback--> dot
+                            |
+                            +--> SQLite: inbox + handling ledger
+
+[B] Authorized output (dot must call explicitly)
+dot --MCP tools--> Official OpenAI Tunnel --loopback MCP--> bridge
+                                                           |
+                          Feishu DM <--Feishu API-----------+
+                                                           |
+                          SQLite: outbox + receipts <-------+
+```
+
+`[A]` persists new inputs and notifies/wakes dot; callback acceptance does not mean processing is complete. In `[B]`, dot calls tools through the owner's official Tunnel before the bridge sends text, bounded PNG/JPEG or status cards. Intake, handling decisions, output queues and receipts are recorded separately. `sent` means API acceptance only; `uncertain` is never automatically resent. The bridge runs no model and does not automatically capture every dot answer or approval.
+
+## Usage examples
+
+<picture>
+  <source media="(max-width: 600px)" srcset="docs/assets/usage-examples.en.mobile.svg">
+  <img src="docs/assets/usage-examples.en.svg" alt="Synthetic examples, not real chat screenshots: authorized text reply, actual-byte image delivery, progress updates to the same card, and a confirmation card that only opens the official dot entry." width="1440">
+</picture>
+
+*Original synthetic examples, not real chat screenshots. No user chats, account or receipt identifiers are included. Layout illustrates behavior, not identical rendering in every client; see the separate [acceptance record](docs/ACCEPTANCE.md).*
+
+| Example | Required call and boundary |
+| --- | --- |
+| Text reply | `reply_to_feishu` sends an authorized reply to the original message |
+| Current generated image | A trusted adapter supplies actual bytes of the current user-requested image; opt-in output stages, uploads and sends it, with separate receipts. A private link is not an image delivery |
+| Progress update | Callers submit states explicitly; ordinary updates PATCH one card. Completion is not automatically inferred by observing dot |
+| Confirmation wait | An important wait sends a new card with action and reason. The button opens the official dot entry; the user confirms in the original Activity request. Feishu clicks grant no permission |
+
+Image input and output are separate opt-ins limited to bounded PNG/JPEG. Audio and transcription are unsupported. All outputs target the owner's current paired DM and require explicit authorization. This is a personal self-hosted bridge, not a shared hosted service.
+
 ## Before you start
 
 - **Host:** Linux/macOS, Node.js 24+, npm, persistent disk, process supervision and outbound HTTPS/WebSocket access. Image mode additionally needs Linux `/usr/bin/prlimit` and the pinned `sharp` dependencies.
@@ -95,5 +131,3 @@ The full suite requires Linux, `/usr/bin/prlimit`, `openssl` and `mkfifo`. macOS
 ## License
 
 Source is [MIT](LICENSE). Image dependencies and prebuilt native components have separate licenses. Review the [third-party terms and obligations](docs/DEPENDENCY_LICENSES.md) before distribution.
-
-See the [explicit output delivery candidate](docs/OUTPUT_DELIVERY_CANDIDATE.md) for current generated images and status cards. Image output is off by default; callers submit statuses explicitly. This does not automatically capture every dot answer or approval.
