@@ -123,13 +123,13 @@ test('reference capacity counts every embedded image, and duplicated events cann
     const event=f.bridge.listPendingEvents(f.alice).events[0]!;await media.readImage(f.alice,{event_id:event.event_id,image_index:2});assert.deepEqual(seen,['img_B']);
   }finally{media.close();f.store.close();}
 });
-test('MCP image index is optional and strict while tool count remains ten',async()=>{
+test('MCP image index is optional and strict while tool count includes explicit status outputs',async()=>{
   const f=fixture();f.bind();const media=new MediaInputCandidate(f.bridge,{async download(){throw new Error();}},()=>true,f.now);
   const app=makeApp({authMode:'oauth',publicUrl:'http://127.0.0.1',issuer:'https://example.invalid',apps:[mockApp],allowedOrigins:[]},f.bridge,{async authenticate(){return f.alice;}},media);
   const meta={'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientInfo':{name:'MOCK-rich-post',version:'1'},'io.modelcontextprotocol/clientCapabilities':{}};
   const rpc=async(method:string,params:Record<string,unknown>={})=>(await(await app(new Request('http://127.0.0.1/mcp',{method:'POST',headers:{'content-type':'application/json',accept:'application/json,text/event-stream','MCP-Protocol-Version':'2026-07-28','Mcp-Method':method,...(method==='tools/call'?{'Mcp-Name':String(params.name)}:{})},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params:{...params,_meta:meta}})}))).json()).result;
   try{
-    const catalog=(await rpc('tools/list')).tools;assert.equal(catalog.length,10);const tool=catalog.find((x:{name:string})=>x.name==='get_event_image');assert.deepEqual(tool.inputSchema.required,['event_id']);assert.equal(tool.inputSchema.properties.image_index.default,1);assert.equal(tool.inputSchema.properties.image_index.maximum,4);assert.equal(tool.inputSchema.additionalProperties,false);
+    const catalog=(await rpc('tools/list')).tools;assert.equal(catalog.length,17);const tool=catalog.find((x:{name:string})=>x.name==='get_event_image');assert.deepEqual(tool.inputSchema.required,['event_id']);assert.equal(tool.inputSchema.properties.image_index.default,1);assert.equal(tool.inputSchema.properties.image_index.maximum,4);assert.equal(tool.inputSchema.additionalProperties,false);
     const events=await rpc('events/list');assert.equal(events.events[0].payloadSchema.properties.media.properties.image_count.maximum,4);
   }finally{media.close();f.store.close();}
 });

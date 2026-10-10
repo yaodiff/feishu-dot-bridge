@@ -44,7 +44,7 @@ test('media deployment mode is default-off and fails closed on unrecognized valu
   assert.equal(mediaInputEnabled({ FEISHU_MEDIA_INPUT: 'images-v1' }), true);
   for (const value of ['true', 'all', 'audio', '', 'images']) assert.throws(() => mediaInputEnabled({ FEISHU_MEDIA_INPUT: value }), code('invalid_media_mode'));
 });
-test('signed ingress → source event notice → owned MCP read returns sanitized image with ten-tool opt-in', async () => {
+test('signed ingress → source event notice → owned MCP read returns sanitized image with fourteen-tool opt-in', async () => {
   const f = fixture(); f.bind(); await f.subscribe(); let downloads = 0; const input = await pixelPng();
   const media = new MediaInputCandidate(f.bridge, { async download(request, _signal, check) { check(); downloads++; assert.equal(request.messageId, 'om_image'); assert.equal(request.reference.resourceKey, 'img_SYNTHETIC'); return { bytes: Buffer.from(input), declaredMime: 'image/png' }; } }, () => true, f.now);
   const app = makeApp({ authMode: 'oauth', publicUrl: 'http://127.0.0.1', issuer: 'https://MOCK.invalid', apps: [mockApp], allowedOrigins: [] }, f.bridge,
@@ -55,7 +55,7 @@ test('signed ingress → source event notice → owned MCP read returns sanitize
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: meta } }) }));
   const call = async (name: string, args: unknown = {}) => (await (await rpc('tools/call', { name, arguments: args })).json()).result;
   try {
-    const catalog = (await (await rpc('tools/list')).json()).result.tools; assert.equal(catalog.length, 10);
+    const catalog = (await (await rpc('tools/list')).json()).result.tools; assert.equal(catalog.length, 17);
     const tool = catalog.find((x: any) => x.name === 'get_event_image'); assert.ok(tool); assert.equal(tool.inputSchema.additionalProperties, false); assert.equal(tool.annotations.readOnlyHint, true);
     const events = (await (await rpc('events/list')).json()).result.events; assert.ok(events[0].payloadSchema.properties.media);
     const payload = feishuPayload('', { type: 'image', messageId: 'om_image' }); payload.event.message.content = '{"image_key":"img_SYNTHETIC"}'; payload.event.message.create_time = String(f.now());

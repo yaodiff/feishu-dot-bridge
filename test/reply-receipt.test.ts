@@ -80,12 +80,13 @@ for(const version of [1,2] as const)test('historical schema '+version+' upgrades
       const queued=f.bridge.reply(f.alice,{event_id:id,text:'MOCK_HISTORY'});
       f.store.db.prepare('UPDATE jobs SET state=?,attempts=1 WHERE id=?').run(state,queued.reply_id);
     }
+    f.store.db.exec('DROP TABLE event_handling');
     for(const name of columns)f.store.db.exec('ALTER TABLE jobs DROP COLUMN '+name);
     if(version===1)f.store.db.exec('DROP TABLE mirror_outbox;DROP TABLE content_dispositions');
     f.store.db.exec('PRAGMA user_version='+version);const before=f.store.db.prepare('SELECT id,state,attempts,payload FROM jobs ORDER BY seq').all();f.store.close();
     const upgraded=new Store(path);
     try{
-      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()!.user_version,3);
+      assert.equal(upgraded.db.prepare('PRAGMA user_version').get()!.user_version,5);
       assert.deepEqual(upgraded.db.prepare('SELECT id,state,attempts,payload FROM jobs ORDER BY seq').all(),before);
       for(const row of upgraded.db.prepare('SELECT remoteMessageId,rootMessageId,parentMessageId,threadId,completedAt FROM jobs').all())assert.ok(Object.values(row).every(v=>v===null));
       let sends=0;const bridge=new Bridge(upgraded,new SecretBox(f.storageKey),f.transport,{async reply(){sends++;return receipt;}},f.now);
@@ -134,7 +135,8 @@ for(const version of [2,3] as const)test('schema '+version+' startup treats atte
     f.bind();await f.subscribe();const id=event(f);
     const queued=f.bridge.reply(f.alice,{event_id:id,text:'MOCK_REPLY'});
     f.store.db.prepare("UPDATE jobs SET state='sending',attempts=1,firstAttemptAt=?").run(f.now());
-    if(version===2){for(const name of columns)f.store.db.exec('ALTER TABLE jobs DROP COLUMN '+name);f.store.db.exec('PRAGMA user_version=2');}
+    if(version===2){f.store.db.exec('DROP TABLE event_handling');for(const name of columns)f.store.db.exec('ALTER TABLE jobs DROP COLUMN '+name);f.store.db.exec('PRAGMA user_version=2');}
+    if(version===3)f.store.db.exec('DROP TABLE event_handling;PRAGMA user_version=3');
     f.store.close();const recovered=new Store(path);
     try{
       assert.equal(recovered.job(queued.reply_id)!.state,'uncertain');

@@ -1,3 +1,5 @@
+import { outputSchema, invalidOutputQueries } from './output-schema.js';
+import { handlingSchema, invalidHandlingQueries } from './handling-schema.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -17,7 +19,7 @@ export class Store {
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
     const schemaVersion = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-    if (schemaVersion > 3) { this.db.close(); throw new Error('Unsupported database schema version'); }
+    if (schemaVersion > 5) { this.db.close(); throw new Error('Unsupported database schema version'); }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS bindings (id TEXT PRIMARY KEY, owner TEXT NOT NULL, appId TEXT NOT NULL, tenantKey TEXT NOT NULL, openId TEXT NOT NULL, chatId TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
       CREATE UNIQUE INDEX IF NOT EXISTS binding_identity ON bindings(appId,tenantKey,openId) WHERE active=1;
@@ -47,6 +49,24 @@ export class Store {
       }
       this.db.exec('PRAGMA user_version=3');
     });
+    // Seed metadata from existing reservations without sending/backfilling content.
+    if (schemaVersion < 4) this.transaction(() => {
+      this.db.exec(handlingSchema);
+      this.db.exec(`INSERT OR IGNORE INTO event_handling(eventId,state,receivedAt,updatedAt)
+        SELECT i.id,CASE WHEN EXISTS(SELECT 1 FROM jobs j WHERE j.inboxId=i.id AND j.kind='reply') THEN 'reply_reserved' ELSE 'awaiting_processing' END,
+          COALESCE((SELECT r.receivedAt FROM receipts r WHERE 'evt_'||r.id=i.id),0),
+          COALESCE((SELECT r.receivedAt FROM receipts r WHERE 'evt_'||r.id=i.id),0) FROM inbox i;
+        PRAGMA user_version=4;`);
+    });
+    if (schemaVersion < 5) this.transaction(() => { this.db.exec(outputSchema); this.db.exec('PRAGMA user_version=5'); });
+    // A v4 ledger is durable evidence of waits/prohibitions. Missing rows must
+    // never be recreated as unclaimed work and silently reopen those decisions.
+    try {
+      for (const query of [...invalidHandlingQueries,...invalidOutputQueries]) {
+        if (this.db.prepare('SELECT 1 '+query+' LIMIT 1').get()) throw new Error('Malformed event handling ledger');
+      }
+    } catch (error) { this.db.close(); throw error; }
+    this.db.exec("UPDATE output_outbox SET state='uncertain',failure='restart_during_send',payload='' WHERE state='sending'");
     this.db.exec(`UPDATE mirror_outbox SET state='pending' WHERE state='sending'`);
     // A sending reply may already have been accepted, including when both the
     // receipt write and uncertain fallback failed. Startup must not replay it.
@@ -76,8 +96,15 @@ export class Store {
       ${ownedInbox} AND i.id=? AND unixepoch(i.timestamp,'subsec') BETWEEN ? AND ?`)
       .get(...bindingScope(binding), eventId, since / 1000, at / 1000) as OwnedEventReplyRow | undefined;
   }
+  ownedHandlingEvent(binding: Binding, id: string) {
+    return this.db.prepare(`SELECT i.id ${ownedInbox} AND i.id=?`).get(...bindingScope(binding),id);
+  }
+  ownedHandlingEvents(binding: Binding, after: number, limit: number) {
+    return this.db.prepare(`SELECT i.id,i.seq ${ownedInbox} AND i.seq>? ORDER BY i.seq LIMIT ?`)
+      .all(...bindingScope(binding),after,limit) as {id:string;seq:number}[];
+  }
   isRevoked(owner: string): boolean { return !!this.db.prepare('SELECT owner FROM revoked WHERE owner=?').get(owner); }
-  revoke(owner: string) { this.transaction(() => { this.db.prepare('INSERT OR IGNORE INTO revoked(owner) VALUES (?)').run(owner); this.db.prepare('UPDATE bindings SET active=0 WHERE owner=?').run(owner); this.db.prepare('UPDATE subscriptions SET active=0 WHERE owner=?').run(owner); this.db.prepare('DELETE FROM pairs WHERE owner=?').run(owner); this.db.prepare("UPDATE mirror_outbox SET state='cancelled' WHERE owner=? AND state='pending'").run(owner); }); }
+  revoke(owner: string) { this.transaction(() => { this.db.prepare('INSERT OR IGNORE INTO revoked(owner) VALUES (?)').run(owner); this.db.prepare('UPDATE bindings SET active=0 WHERE owner=?').run(owner); this.db.prepare('UPDATE subscriptions SET active=0 WHERE owner=?').run(owner); this.db.prepare('DELETE FROM pairs WHERE owner=?').run(owner); this.db.prepare("UPDATE mirror_outbox SET state='cancelled' WHERE owner=? AND state='pending'").run(owner); this.db.prepare("UPDATE output_outbox SET state='cancelled',payload='',failure='account_revoked' WHERE owner=? AND state='pending'").run(owner); this.db.prepare('UPDATE output_media SET consumed=1 WHERE owner=?').run(owner); this.db.prepare('DELETE FROM output_chunks WHERE mediaId IN (SELECT id FROM output_media WHERE owner=?)').run(owner); }); }
   assertPersonalScope(owner: string, appId: string, tenantKey: string): void {
     for (const table of ['bindings', 'pairs', 'subscriptions', 'inbox', 'revoked']) {
       if (this.db.prepare(`SELECT 1 FROM ${table} WHERE owner != ? LIMIT 1`).get(owner)) throw new Error('Database contains another owner; use a separate personal database or an explicit reviewed migration');
@@ -87,6 +114,9 @@ export class Store {
     }
     if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mirror_outbox'").get()) {
       if (this.db.prepare('SELECT 1 FROM mirror_outbox WHERE owner!=? OR appId!=? OR tenantKey!=? LIMIT 1').get(owner, appId, tenantKey)) throw new Error('Mirror outbox belongs to a different installation');
+    }
+    for (const table of ['output_outbox','output_media']) if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) {
+      if (this.db.prepare(`SELECT 1 FROM ${table} o JOIN bindings b ON b.id=o.bindingId WHERE o.owner!=? OR b.appId!=? OR b.tenantKey!=? LIMIT 1`).get(owner,appId,tenantKey)) throw new Error('Output ledger belongs to a different installation');
     }
     const active = this.db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE active=1 AND expiresAt>?').get(Date.now())!;
     if (Number(active.n) > 1) throw new Error('Personal mode permits only one active subscription');

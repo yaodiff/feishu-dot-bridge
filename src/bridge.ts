@@ -1,3 +1,5 @@
+import { OutputDelivery, type OutputDecoder } from './output.js';
+import { EventHandling } from './event-handling.js';
 import { sanitizeReplyReceipt } from './reply-receipt.js';
 import { classifyText } from './content-safety.js';
 import { mediaNoticeSchema, type MediaNotice } from './media-policy.js';
@@ -27,12 +29,15 @@ const eventPayload = (row: OwnedEventRow) => ({ event_id: row.event_id, ...safeC
 export const sendBoundSchema = z.object({ binding_id: z.string().min(1).max(256), source_message_id: z.string().min(1).max(256), source_role: z.enum(['user', 'assistant']), text: z.string().min(1).max(12000) }).strict();
 export const mirrorStatusSchema = z.object({ sync_id: z.string().min(1).max(256) }).strict();
 const safeReplyStates = new Set(['pending', 'sending', 'sent', 'dead', 'cancelled', 'uncertain', 'blocked']);
-export const replySchema = z.object({ event_id: z.string().min(1).max(256), text: z.string().min(1).max(12000) }).strict();
+export const replySchema = z.object({ event_id: z.string().min(1).max(256), text: z.string().min(1).max(12000), handling_revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).strict();
 export function validSecret(secret: string): boolean { if (!/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(secret)) return false; const b = Buffer.from(secret.slice(6), 'base64'); return b.length >= 24 && b.length <= 64 && b.toString('base64').replace(/=+$/, '') === secret.slice(6).replace(/=+$/, ''); }
 export class Bridge {
+  readonly handling: EventHandling;
+  readonly output: OutputDelivery;
   private pumping = false;
   private preferMirror = false;
-  constructor(readonly store: Store, private box: SecretBox, private transport: CallbackTransport, private sender: FeishuSender, private now: () => number = Date.now, private personal?: { owner: string; appId: string; tenantKey: string }, private diagnostic?: (event: CallbackVerificationDiagnostic) => void | Promise<void>) { if (personal) store.assertPersonalScope(personal.owner, personal.appId, personal.tenantKey); }
+  private preferOutput = true;
+  constructor(readonly store: Store, private box: SecretBox, private transport: CallbackTransport, private sender: FeishuSender, private now: () => number = Date.now, private personal?: { owner: string; appId: string; tenantKey: string }, private diagnostic?: (event: CallbackVerificationDiagnostic) => void | Promise<void>, outputOptions?:{images:boolean;decode?:OutputDecoder}) { if (personal) store.assertPersonalScope(personal.owner, personal.appId, personal.tenantKey); this.handling = new EventHandling(this,now); this.output = new OutputDelivery(this,box,sender,now,outputOptions?.decode,outputOptions?.images); }
   private verificationDiagnostic(reason: CallbackVerificationReason, started: number, httpStatus?: number): void {
     const elapsedMs = Math.max(0, Math.min(60000, Math.floor(this.now() - started)));
     if (!Number.isFinite(elapsedMs)) return;
@@ -43,7 +48,7 @@ export class Bridge {
   private authorize(p: Principal) { if ((this.personal && p.id !== this.personal.owner) || p.expiresAt <= this.now() || this.store.isRevoked(p.id)) throw new BridgeError('unauthorized', 401); }
   beginBinding(p: Principal) { this.authorize(p); if (this.store.binding(p.id)) throw new BridgeError('already_bound_unlink_first'); const code = randomToken(); const expiresAt = Math.min(this.now() + 300000, p.expiresAt); this.store.transaction(() => { this.store.db.prepare('DELETE FROM pairs WHERE owner=? OR expiresAt<=?').run(p.id, this.now()); this.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run(hash(code), p.id, expiresAt); }); return { command: `/bind ${code}`, expires_at: new Date(expiresAt).toISOString(), instruction: 'Send this command only in a private chat with the intended Feishu bot. Then check binding_status. Never share this code.' }; }
   status(p: Principal) { this.authorize(p); const b = this.store.binding(p.id); return b ? { bound: true, binding_id: b.id, app_id: b.appId, tenant_key: b.tenantKey, open_id: b.openId } : { bound: false }; }
-  unlink(p: Principal) { this.authorize(p); this.store.transaction(() => { this.store.db.prepare('UPDATE bindings SET active=0 WHERE owner=?').run(p.id); this.store.db.prepare('UPDATE subscriptions SET active=0 WHERE owner=?').run(p.id); this.store.db.prepare('DELETE FROM pairs WHERE owner=?').run(p.id); this.store.db.prepare("UPDATE mirror_outbox SET state='cancelled' WHERE owner=? AND state='pending'").run(p.id); this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE inboxId IN (SELECT id FROM inbox WHERE owner=?) AND state='pending'").run(p.id); }); return { unlinked: true }; }
+  unlink(p: Principal) { this.authorize(p); this.store.transaction(() => { this.store.db.prepare('UPDATE bindings SET active=0 WHERE owner=?').run(p.id); this.store.db.prepare('UPDATE subscriptions SET active=0 WHERE owner=?').run(p.id); this.store.db.prepare('DELETE FROM pairs WHERE owner=?').run(p.id); this.store.db.prepare("UPDATE output_outbox SET state='cancelled',payload='',failure='binding_unlinked' WHERE owner=? AND state='pending'").run(p.id); this.store.db.prepare('UPDATE output_media SET consumed=1 WHERE owner=?').run(p.id); this.store.db.prepare('DELETE FROM output_chunks WHERE mediaId IN (SELECT id FROM output_media WHERE owner=?)').run(p.id); this.store.db.prepare("UPDATE mirror_outbox SET state='cancelled' WHERE owner=? AND state='pending'").run(p.id); this.store.db.prepare("UPDATE jobs SET state='cancelled' WHERE inboxId IN (SELECT id FROM inbox WHERE owner=?) AND state='pending'").run(p.id); }); return { unlinked: true }; }
   receive(m: Inbound, mediaNotice?: MediaNotice): { state: string } {
     const media = mediaNotice === undefined ? undefined : mediaNoticeSchema.parse(mediaNotice);
     if (this.personal && (m.appId !== this.personal.appId || m.tenantKey !== this.personal.tenantKey)) return { state: 'wrong_installation' };
@@ -67,6 +72,7 @@ export class Bridge {
       const content = safeContent(m.text, m.contentStatus);
       const eventId = `evt_${receiptId}`;
       this.store.db.prepare('INSERT INTO inbox(id,owner,bindingId,appId,tenantKey,openId,messageId,chatId,text,timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)').run(eventId, binding.owner, binding.id, m.appId, m.tenantKey, m.openId, m.messageId, m.chatId, content.text, m.timestamp);
+      this.store.db.prepare('INSERT INTO event_handling(eventId,receivedAt,updatedAt) VALUES (?,?,?)').run(eventId,this.now(),this.now());
       if (content.content_status) this.store.db.prepare('INSERT INTO content_dispositions(eventId,status) VALUES (?,?)').run(eventId, content.content_status);
       const subscriptions = this.store.db.prepare('SELECT * FROM subscriptions WHERE bindingId=? AND active=1 AND expiresAt>?').all(binding.id, this.now()) as unknown as Subscription[];
       // A non-deliverable metadata row preserves polling-only post availability
@@ -115,7 +121,9 @@ export class Bridge {
       const content = safeContent(args.text);
       const id = `reply_${hash(args.event_id)}`, payload = JSON.stringify({ text: content.text }); const existing = this.store.job(id);
       if (existing) { if (existing.payload !== payload) throw new BridgeError('reply_already_reserved'); return { reply_id: id, state: existing.state, ...(content.content_status ? { content_status: content.content_status } : {}) }; }
+      this.handling.assertReplyAllowed(inbox.id,args.handling_revision);
       this.store.db.prepare('INSERT INTO jobs(id,kind,lane,inboxId,payload,accessUntil) VALUES (?,?,?,?,?,?)').run(id, 'reply', `reply:${inbox.bindingId}`, inbox.id, payload, p.expiresAt);
+      this.handling.recordReply(inbox.id);
       return { reply_id: id, state: 'pending', ...(content.content_status ? { content_status: content.content_status } : {}) };
     });
   }
@@ -190,6 +198,7 @@ export class Bridge {
       ...(completedAt != null && Number.isSafeInteger(completedAt) && completedAt >= 0 && completedAt <= 8640000000000000
         ? { completed_at: new Date(completedAt).toISOString() } : {}) };
   }
+  currentEventBinding(p: Principal) { this.authorize(p); return this.eventReadBinding(p); }
   private eventReadBinding(p: Principal): Binding | undefined {
     const binding = this.store.binding(p.id);
     if (this.personal && binding && (binding.appId !== this.personal.appId || binding.tenantKey !== this.personal.tenantKey)) return undefined;
@@ -239,11 +248,12 @@ export class Bridge {
     if (this.pumping) return 0; this.pumping = true; let processed = 0;
     try {
       while (processed < limit) {
+        if (this.preferOutput && await this.output.pumpOne()) { processed++; this.preferOutput=false; continue; }
         // Alternate available lanes so continuous callbacks cannot starve bound sends.
-        if (this.preferMirror && await this.pumpMirrorOne()) { processed++; this.preferMirror = false; continue; }
+        if (this.preferMirror && await this.pumpMirrorOne()) { processed++; this.preferMirror = false; this.preferOutput=true; continue; }
         // Earlier pending jobs block later jobs in their lane, even during backoff.
         const job = this.store.db.prepare(`SELECT * FROM jobs j WHERE j.kind IN ('event','reply') AND j.state='pending' AND j.nextAt<=? AND NOT EXISTS (SELECT 1 FROM jobs p WHERE p.lane=j.lane AND p.seq<j.seq AND p.state IN ('pending','sending')) ORDER BY j.seq LIMIT 1`).get(this.now()) as Job | undefined;
-        if (!job) { if (await this.pumpMirrorOne()) { processed++; this.preferMirror = false; continue; } break; } processed++; this.preferMirror = true;
+        if (!job) { if (await this.pumpMirrorOne()) { processed++; this.preferMirror = false; this.preferOutput=true; continue; } if(await this.output.pumpOne()) {processed++; continue;} break; } processed++; this.preferMirror = true; this.preferOutput=true;
         const inbox = this.store.inbox(job.inboxId), binding = inbox && this.store.bindingById(inbox.bindingId);
         const sub = job.subscriptionId ? this.store.subscription(job.subscriptionId) : undefined;
         if (!inbox || !binding || (this.personal && (inbox.owner !== this.personal.owner || inbox.appId !== this.personal.appId || inbox.tenantKey !== this.personal.tenantKey)) || this.store.isRevoked(inbox.owner) || (job.kind === 'event' && (!sub || !sub.active || sub.expiresAt <= this.now() || sub.bindingId !== binding.id))) { this.setState(job, 'cancelled'); continue; }
@@ -256,7 +266,7 @@ export class Bridge {
             const body = JSON.parse(job.payload);
             if (typeof body?.data?.text !== 'string' || classifyText(body.data.text) === 'credential') { this.setState(job, 'blocked'); continue; }
             const response = await this.transport.post(sub.url, job.payload, this.signedHeaders(sub.id, inbox.id, job.payload, this.box.open(sub.secret), sub.oldSecret && sub.rotateUntil > this.now() ? this.box.open(sub.oldSecret) : undefined));
-            if (response.status >= 200 && response.status < 300) this.setState(job, 'sent');
+            if (response.status >= 200 && response.status < 300) this.store.transaction(()=>{ this.setState(job,'sent'); this.store.db.prepare('UPDATE event_handling SET callbackAcceptedAt=COALESCE(callbackAcceptedAt,?) WHERE eventId=?').run(this.now(),inbox.id); });
             else if (response.status === 410 || response.status === 413 || (response.status >= 400 && response.status < 500 && response.status !== 429)) { this.setState(job, 'dead'); if (response.status === 410) this.store.db.prepare('UPDATE subscriptions SET active=0 WHERE id=?').run(sub.id); }
             else this.retry(job);
           } else {

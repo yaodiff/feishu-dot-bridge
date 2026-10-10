@@ -23,7 +23,7 @@ for (const mode of ['oauth', 'personal-tunnel'] as const) test(`${mode}: authent
   const callback = async (text: string, messageId: string) => { const payload = feishuPayload(text, { messageId }); payload.event.message.create_time = String(f.now()); const c = encryptedCallback(payload); assert.equal((await fetch(origin + '/feishu/events/cli_mock', { method: 'POST', headers: c.headers, body: c.raw })).status, 200); };
   try {
     const discover = await (await rpc('server/discover')).json(); assert.deepEqual(discover.result.capabilities.tools, {});
-    const catalog = await (await rpc('tools/list')).json(); assert.equal(catalog.result.tools.length, 9);
+    const catalog = await (await rpc('tools/list')).json(); assert.equal(catalog.result.tools.length, 16);
     for (const name of ['list_pending_events', 'get_event']) {
       const tool = catalog.result.tools.find((t: { name: string }) => t.name === name); assert.ok(tool);
       assert.deepEqual(tool.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });

@@ -18,7 +18,7 @@ for (const mode of ['oauth', 'personal-tunnel'] as const) test(`${mode}: new too
   try {
     f.bind(owner); const binding = f.store.binding(owner.id)!;
     const catalog = (await (await rpc('tools/list')).json()).result.tools;
-    assert.equal(catalog.length, 9);
+    assert.equal(catalog.length, 16);
     for (const name of ['begin_binding','binding_status','unlink_binding','reply_to_feishu','delivery_status','get_event','list_pending_events']) assert.ok(catalog.find((t: { name: string }) => t.name === name));
     for (const [name, read] of [['send_to_bound_feishu', false], ['mirror_delivery_status', true]] as const) {
       const tool = catalog.find((t: { name: string }) => t.name === name); assert.ok(tool);

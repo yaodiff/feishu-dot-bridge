@@ -1,3 +1,5 @@
+import { outputSchema } from '../src/output-schema.js';
+import { handlingSchema } from '../src/handling-schema.js';
 /** Exact supported offline schema descriptions, never executed against the target.
  * Keep fail-closed: a new runtime schema requires separate maintenance review. */
 export const schema1 = `
@@ -25,3 +27,7 @@ ALTER TABLE jobs ADD COLUMN parentMessageId TEXT;
 ALTER TABLE jobs ADD COLUMN threadId TEXT;
 ALTER TABLE jobs ADD COLUMN completedAt INTEGER;
 `;
+
+export const schema4 = schema3 + handlingSchema;
+
+export const schema5 = schema4 + outputSchema;
