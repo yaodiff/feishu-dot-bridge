@@ -21,6 +21,8 @@ The first submission sends an interactive JSON 2.0 card. Ordinary progress/compl
 
 The title and message summary name the status. The wait button has only `open_url`, no callback/value/allow action. It opens the independently verified official dot entry `https://chatgpt.com/dots/home` and instructs the user to open Activity and respond in the actual request. It does **not** grant dot permission or claim to target a specific approval. The official control documentation verifies the Activity workflow; the button does not target a specific task or approval and accepts no caller-controlled URL. Mobile web dot availability is limited by the official product; use the ChatGPT app when necessary.
 
+A processing card may include `confirmation_notice:"before_action"` with action/reason to warn prospectively before a protected tool call; it explicitly does not claim an observed approval. For an actual Feishu-input wait, optional `complete_event_handling.notice` records the wait and reserves its notification atomically. See [confirmation reminders and failure checks](WAIT_CONFIRMATION.md). Both paths require explicit calls and authorization.
+
 Cards/images have their own output ledger. They do not fabricate text replies, mark an inbox event handled, or satisfy `covered_by_reply`. Continue to claim/reconcile every original event through the existing schema4 handling workflow.
 
 ## Durability and failure checks

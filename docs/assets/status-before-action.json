@@ -1,0 +1,69 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "summary": {
+      "content": "行动前提示 · 合成示例：准备尝试外部动作"
+    }
+  },
+  "header": {
+    "title": {
+      "tag": "plain_text",
+      "content": "dot · 行动前提示"
+    },
+    "template": "blue"
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "合成示例：准备尝试外部动作"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "需要执行：尝试上传用户要求的合成文件"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "原因：dot 可能要求原生确认"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "下一步将尝试上述动作，dot 可能要求确认。这是行动前提示，不表示已有审批请求。飞书无法自动捕获所有 dot 审批；如等待，请查看原 Activity 请求。"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "如 dot 出现确认，请在原 Activity 请求中处理。飞书点击只跳转，不授予 dot 权限。此提示由调用者提交。"
+        }
+      },
+      {
+        "tag": "button",
+        "text": {
+          "tag": "plain_text",
+          "content": "打开 dot"
+        },
+        "type": "primary",
+        "behaviors": [
+          {
+            "type": "open_url",
+            "default_url": "https://chatgpt.com/dots/home"
+          }
+        ]
+      }
+    ]
+  }
+}
