@@ -121,6 +121,7 @@ The full suite requires Linux, `/usr/bin/prlimit`, `openssl` and `mkfifo`. macOS
 | Next step | Documentation |
 | --- | --- |
 | Install, connect a Tunnel, back up or upgrade | [Personal deployment](docs/DEPLOYMENT.md) |
+| Handle native approval pauses and wait notices | [Confirmation reminders and recovery boundaries](docs/WAIT_CONFIRMATION.md) |
 | Configure dot's processing and reply workflow | [Per-event handling](docs/EVENT_HANDLING.md) · [Owned reads](docs/OWNED_EVENT_READS.md) |
 | Enable images or understand rich posts | [Image input](docs/MEDIA_INPUT_CANDIDATE.md) · [Rich posts](docs/RICH_POST_INPUT.md) |
 | Send current generated images or explicit status cards | [Output delivery and media handoff](docs/OUTPUT_DELIVERY_CANDIDATE.md) |

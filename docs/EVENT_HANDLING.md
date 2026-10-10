@@ -4,7 +4,7 @@ The inbox, callback transport and reply sender remain separate. A callback 2xx
 means notification acceptance, not model processing or a Feishu reply. A dot
 answer does not create a reply job. This ledger records decisions and exposes
 missing-work alerts; it does not generate answers, send placeholders, wake tasks,
-or invent a platform acknowledgement.
+or invent a platform acknowledgement. An explicitly authorized `notice` on a caller-reported wait can now reserve a separate status notification atomically; it does not send an answer or approve the action.
 
 ## Tools and states
 
@@ -28,7 +28,7 @@ The default catalog has 16 tools, including explicit status/output queries. Imag
 - `complete_event_handling({event_id, revision, outcome, ...})`: complete a live
   claim as `waiting_authorization`, `no_reply` with `sending_prohibited` or
   `no_response_needed`, or `covered_by_reply` with `covering_event_id`. There is
-  deliberately no `answered_in_dot` or caller-supplied `sent` state.
+  deliberately no `answered_in_dot` or caller-supplied `sent` state. Optional `notice` on `waiting_authorization` reserves a card in the same transaction; see [confirmation workflow](WAIT_CONFIRMATION.md). Without it, the wait sends nothing and exposes `waiting_notification.state=not_submitted`.
 
 New events begin `awaiting_processing`. A successful claim changes them to
 `processing`. `reply_to_feishu` atomically creates the real outbox reservation
@@ -71,9 +71,12 @@ Authorized ordinary answer:
   reply_to_feishu({event_id:E,text:ACTUAL_ANSWER,handling_revision:C})
   delivery_status({event_id:E}) -> inspect pending/sent/uncertain/etc.
 
-Waiting for approval (no send):
+Waiting for actual observed approval (omit notice if sending prohibited):
   complete_event_handling({event_id:E,revision:C,
-                          outcome:"waiting_authorization"})
+                          outcome:"waiting_authorization",
+                          notice:{summary:ACTUAL_WAIT,action:REQUIRED_ACTION,
+                                  reason:ACTUAL_REASON,
+                                  existing_user_authorization:true}})
 
 Explicitly prohibited or no answer needed (no send):
   complete_event_handling({event_id:E,revision:C,outcome:"no_reply",

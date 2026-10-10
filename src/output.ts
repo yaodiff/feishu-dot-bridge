@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { hash, type SecretBox } from './crypto.js';
 import { BridgeError, type Principal, type FeishuSender, type Binding } from './types.js';
 import type { Bridge } from './bridge.js';
-import { statusCardSchema, buildStatusCard } from './status-card.js';
+import { statusCardSchema, buildStatusCard, type StatusSubmission, waitNoticeSchema } from './status-card.js';
 import { inspectMedia, MEDIA_LIMITS } from './media-policy.js';
 import { sanitizeImage } from './media-image.js';
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -17,6 +17,8 @@ export const imageChunkSchema = z.object({ binding_id:id, source_message_id:id, 
 export const imageSendSchema = z.object({ binding_id:id, transfer_id:id, request_id:id, existing_user_authorization:z.literal(true) }).strict();
 interface OutputRow { seq:number; id:string; owner:string; bindingId:string; requestId:string; kind:'image'|'card'; taskId:string|null; revision:number|null; targetMessageId:string|null; payload:string; digest:string; state:string; phase:string; attempts:number; createdAt:number; accessUntil:number; remoteMessageId:string|null; imageKey:string|null; completedAt:number|null; failure:string|null }
 interface MediaRow { id:string; owner:string; bindingId:string; sourceId:string; digest:string; mime:'image/png'|'image/jpeg'; generatedAt:number; expiresAt:number; totalChunks:number; consumed:number }
+export const EVENT_WAIT_PREFIX = 'event_wait_';
+export const eventWaitId = (eventId:string, revision:number) => EVENT_WAIT_PREFIX+hash(JSON.stringify([eventId,revision]));
 export type OutputDecoder = (bytes:Buffer, mime:string, signal:AbortSignal) => Promise<{bytes:Buffer}>;
 /** Explicit submissions only. No capture hook, URL download, file reader or approval handler. */
 export class OutputDelivery {
@@ -30,7 +32,7 @@ export class OutputDelivery {
   }
   private row(id:string) { return this.db.prepare('SELECT * FROM output_outbox WHERE id=?').get(id) as unknown as OutputRow|undefined; }
   private result(r:OutputRow) { return { output_id:r.id, seq:r.seq, kind:r.kind, state:r.state, phase:r.phase, attempts:r.attempts, revision:r.revision,
-    ...(r.remoteMessageId ? {message_id:r.remoteMessageId} : {}), ...(r.imageKey ? {image_key:r.imageKey, upload_accepted:true} : {}),
+    ...(r.taskId ? {task_id:r.taskId} : {}), ...(r.remoteMessageId ? {message_id:r.remoteMessageId} : {}), ...(r.imageKey ? {image_key:r.imageKey, upload_accepted:true} : {}),
     ...(r.completedAt !== null ? {api_accepted_at:new Date(r.completedAt).toISOString()} : {}), ...(r.failure ? {failure:r.failure} : {}),
     requires_attention:['failed','blocked','uncertain','cancelled'].includes(r.state), api_accepted:r.state==='sent' }; }
   status(p:Principal, input:unknown) {
@@ -44,17 +46,34 @@ export class OutputDelivery {
     return {outputs:rows.filter(r=>r.state!=='sent').map(r=>this.result(r)),next_after_seq:rows.at(-1)?.seq ?? a.after_seq, scan_from_zero_again:true};
   }
   card(p:Principal,input:unknown) {
-    const a=statusCardSchema.parse(input), b=this.binding(p,a.binding_id), payload=JSON.stringify(buildStatusCard(a));
-    const bodyDigest=hash(JSON.stringify(a)), outputId='out_'+hash(JSON.stringify([p.id,b.id,a.request_id]));
-    return this.bridge.store.transaction(()=>{
-      const existing=this.row(outputId); if(existing) { if(existing.digest!==bodyDigest) throw new BridgeError('output_request_conflict'); return this.result(existing); }
-      const previous=this.db.prepare("SELECT * FROM output_outbox WHERE owner=? AND bindingId=? AND kind='card' AND taskId=? ORDER BY revision DESC LIMIT 1").get(p.id,b.id,a.task_id) as unknown as OutputRow|undefined;
-      if((previous?.revision ?? 0)!==a.expected_revision) throw new BridgeError('status_revision_conflict');
-      if(previous && previous.state!=='sent') throw new BridgeError('previous_status_unresolved');
-      const target=a.status==='waiting_confirmation' ? null : previous?.remoteMessageId ?? null;
-      this.reserve(p,b,outputId,a.request_id,'card',payload,bodyDigest,a.task_id,a.expected_revision+1,target);
-      return this.result(this.row(outputId)!);
-    });
+    const a=statusCardSchema.parse(input);
+    // Only the atomic handling path can create an event-linked wait notice.
+    const b=this.binding(p,a.binding_id);
+    if(a.request_id.startsWith(EVENT_WAIT_PREFIX)) throw new BridgeError('reserved_status_identity');
+    if(a.task_id.startsWith(EVENT_WAIT_PREFIX) && (a.status==='waiting_confirmation' || a.confirmation_notice || !this.db.prepare("SELECT 1 FROM output_outbox WHERE owner=? AND bindingId=? AND taskId=? AND requestId=? AND kind='card' AND revision=1").get(p.id,b.id,a.task_id,a.task_id))) throw new BridgeError('reserved_status_identity');
+    return this.bridge.store.transaction(()=>this.cardInTransaction(p,b,a));
+  }
+  private cardInTransaction(p:Principal,b:Binding,a:StatusSubmission) {
+    const payload=JSON.stringify(buildStatusCard(a)), bodyDigest=hash(JSON.stringify(a)), outputId='out_'+hash(JSON.stringify([p.id,b.id,a.request_id]));
+    const existing=this.row(outputId); if(existing) { if(existing.digest!==bodyDigest) throw new BridgeError('output_request_conflict'); return this.result(existing); }
+    const previous=this.db.prepare("SELECT * FROM output_outbox WHERE owner=? AND bindingId=? AND kind='card' AND taskId=? ORDER BY revision DESC LIMIT 1").get(p.id,b.id,a.task_id) as unknown as OutputRow|undefined;
+    if((previous?.revision ?? 0)!==a.expected_revision) throw new BridgeError('status_revision_conflict');
+    if(previous && previous.state!=='sent') throw new BridgeError('previous_status_unresolved');
+    const target=a.status==='waiting_confirmation' || a.confirmation_notice ? null : previous?.remoteMessageId ?? null;
+    this.reserve(p,b,outputId,a.request_id,'card',payload,bodyDigest,a.task_id,a.expected_revision+1,target);
+    return this.result(this.row(outputId)!);
+  }
+  /** Called only inside the handling transaction after event ownership/lease checks. */
+  waitForEventInTransaction(p:Principal,eventId:string,revision:number,input:unknown) {
+    const n=waitNoticeSchema.parse(input), b=this.binding(p), identity=eventWaitId(eventId,revision);
+    const a=statusCardSchema.parse({...n,binding_id:b.id,request_id:identity,task_id:identity,expected_revision:0,status:'waiting_confirmation'});
+    return this.cardInTransaction(p,b,a);
+  }
+  eventWaitStatus(p:Principal,eventId:string,revision:number) {
+    const b=this.binding(p), identity=eventWaitId(eventId,revision), row=this.row('out_'+hash(JSON.stringify([p.id,b.id,identity])));
+    if(!row || row.kind!=='card' || row.taskId!==identity || row.owner!==p.id || row.bindingId!==b.id) return {state:'not_submitted',api_accepted:false,requires_attention:true};
+    const latest=this.db.prepare("SELECT * FROM output_outbox WHERE owner=? AND bindingId=? AND taskId=? ORDER BY revision DESC LIMIT 1").get(p.id,b.id,identity) as unknown as OutputRow;
+    return {...this.result(latest),initial_output_id:row.id,initial_notice_api_accepted:row.state==='sent'};
   }
   chunk(p:Principal,input:unknown) {
     if(!this.imagesEnabled) throw new BridgeError('image_output_disabled');
@@ -86,7 +105,9 @@ export class OutputDelivery {
   }
   image(p:Principal,input:unknown) {
     if(!this.imagesEnabled) throw new BridgeError('image_output_disabled');
-    const a=imageSendSchema.parse(input), b=this.binding(p,a.binding_id), outputId='out_'+hash(JSON.stringify([p.id,b.id,a.request_id])), bodyDigest=hash(JSON.stringify(a));
+    const a=imageSendSchema.parse(input);
+    if(a.request_id.startsWith(EVENT_WAIT_PREFIX)) throw new BridgeError('reserved_status_identity');
+    const b=this.binding(p,a.binding_id), outputId='out_'+hash(JSON.stringify([p.id,b.id,a.request_id])), bodyDigest=hash(JSON.stringify(a));
     return this.bridge.store.transaction(()=>{
       const existing=this.row(outputId); if(existing) {if(existing.digest!==bodyDigest) throw new BridgeError('output_request_conflict'); return this.result(existing);}
       const m=this.db.prepare('SELECT * FROM output_media WHERE id=? AND owner=? AND bindingId=?').get(a.transfer_id,p.id,b.id) as unknown as MediaRow|undefined;

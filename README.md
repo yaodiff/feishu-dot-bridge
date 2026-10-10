@@ -121,6 +121,7 @@ npm run demo
 | 接下来要做什么 | 文档 |
 | --- | --- |
 | 安装、连接 Tunnel、备份或升级 | [个人部署](docs/DEPLOYMENT.md) |
+| 处理原生审批暂停与等待提醒 | [确认提醒与恢复边界](docs/WAIT_CONFIRMATION.md) |
 | 配置 dot 的处理与回复流程 | [逐事件处理契约](docs/EVENT_HANDLING.md) · [本人事件读取](docs/OWNED_EVENT_READS.md) |
 | 开启图片或了解帖子处理 | [图片输入](docs/MEDIA_INPUT_CANDIDATE.md) · [富文本帖子](docs/RICH_POST_INPUT.md) |
 | 发送当前生成图片或显式状态卡片 | [输出投递与媒体交接](docs/OUTPUT_DELIVERY_CANDIDATE.md) |

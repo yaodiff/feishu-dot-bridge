@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { waitNoticeSchema } from './status-card.js';
 import { hash } from './crypto.js';
 import { BridgeError, type Principal } from './types.js';
 import type { Bridge } from './bridge.js';
@@ -8,7 +9,7 @@ export const handlingStatusSchema = z.object({ event_id: eventId }).strict();
 export const handlingAlertsSchema = z.object({ after_seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0), limit: z.number().int().min(1).max(20).default(10) }).strict();
 export const handlingClaimSchema = z.object({ event_id: eventId, request_id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), lease_ms: z.number().int().min(1000).max(300000).default(60000), resume_waiting: z.literal('existing_user_authorization').optional() }).strict();
 export const handlingCompleteSchema = z.discriminatedUnion('outcome', [
-  z.object({ event_id: eventId, revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), outcome: z.literal('waiting_authorization') }).strict(),
+  z.object({ event_id: eventId, revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), outcome: z.literal('waiting_authorization'), notice:waitNoticeSchema.optional() }).strict(),
   z.object({ event_id: eventId, revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), outcome: z.literal('no_reply'), reason: z.enum(['sending_prohibited', 'no_response_needed']) }).strict(),
   z.object({ event_id: eventId, revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), outcome: z.literal('covered_by_reply'), covering_event_id: eventId }).strict()
 ]);
@@ -53,6 +54,7 @@ export class EventHandling {
       ...(r.reason?{reason:r.reason}:{}),...(r.coveredBy?{covering_event_id:r.coveredBy}:{}),
       callback_accepted:callbackSent,recovery_available:recoveryAvailable,reply_state:job?(replyStates.has(job.state)?job.state:'unknown'):'not_queued',
       ...(r.coveredBy?{reply_state_applies_to:r.coveredBy}:{}),...(alert?{alert}:{}),
+      ...(r.state==='waiting_authorization'?{waiting_notification:this.bridge.output.eventWaitStatus(p,id,r.revision-1)}:{}),
       requires_existing_send_authorization:true as const};
   }
   alerts(p: Principal, input: unknown={}) {
@@ -84,7 +86,10 @@ export class EventHandling {
     return this.bridge.store.transaction(()=>{
       const r=this.owned(p,a.event_id,true), reason=a.outcome==='waiting_authorization'?'authorization_required':a.outcome==='no_reply'?a.reason:'combined_reply';
       const covering=a.outcome==='covered_by_reply'?a.covering_event_id:null;
-      if(r.revision===a.revision+1 && r.state===a.outcome && r.reason===reason && r.coveredBy===covering)return this.status(p,{event_id:a.event_id});
+      if(r.revision===a.revision+1 && r.state===a.outcome && r.reason===reason && r.coveredBy===covering){
+        if(a.outcome==='waiting_authorization' && a.notice) this.bridge.output.waitForEventInTransaction(p,a.event_id,a.revision,a.notice);
+        return this.status(p,{event_id:a.event_id});
+      }
       this.assertLease(r,a.revision);
       if(this.bridge.store.job('reply_'+hash(a.event_id)))throw new BridgeError('reply_already_reserved');
       if(covering){
@@ -94,6 +99,7 @@ export class EventHandling {
         // uncertain association, or dot-only answer can close another event.
         if(anchor.state!=='reply_reserved' || anchor.coveredBy || this.bridge.store.job('reply_'+hash(covering))?.state!=='sent')throw new BridgeError('covering_reply_not_sent');
       }
+      if(a.outcome==='waiting_authorization' && a.notice) this.bridge.output.waitForEventInTransaction(p,a.event_id,a.revision,a.notice);
       this.bridge.store.db.prepare('UPDATE event_handling SET state=?,revision=revision+1,updatedAt=?,leaseUntil=NULL,claimDigest=NULL,reason=?,coveredBy=? WHERE eventId=?')
         .run(a.outcome,this.now(),reason,covering,a.event_id);
       return this.status(p,{event_id:a.event_id});
