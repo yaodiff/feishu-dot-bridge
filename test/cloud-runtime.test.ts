@@ -31,7 +31,7 @@ for (const images of [false, true]) for (const feishuTransport of ['default', 'm
   assert.match(output,/"mode":"personal-tunnel"/);
   const protocolMeta={'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientInfo':{name:'SYNTHETIC-MAIN',version:'1'},'io.modelcontextprotocol/clientCapabilities':{}};
   const result=await (await fetch('http://127.0.0.1:'+port+'/mcp',{method:'POST',headers:{'content-type':'application/json',accept:'application/json,text/event-stream','MCP-Protocol-Version':'2026-07-28','Mcp-Method':'tools/list','X-Bridge-Token':token},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:protocolMeta}})})).json();
-  assert.equal(result.result.tools.length,images?10:9);assert.equal(result.result.tools.some((t:{name:string})=>t.name==='get_event_image'),images);
+  assert.equal(result.result.tools.length,images?17:16);assert.equal(result.result.tools.some((t:{name:string})=>t.name==='get_event_image'),images);
   child.kill('SIGTERM');const [code]=await once(child,'exit');assert.equal(code,0);
  }finally{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit')}rmSync(dir,{recursive:true,force:true})}
 });

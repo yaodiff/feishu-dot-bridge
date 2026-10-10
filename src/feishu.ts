@@ -1,3 +1,4 @@
+import { sanitizeReplyReceipt } from './reply-receipt.js';
 import { createHash, createDecipheriv } from 'node:crypto';
 import axios from 'axios';
 import * as lark from '@larksuiteoapi/node-sdk';
@@ -6,7 +7,7 @@ import { classifyText } from './content-safety.js';
 import { parseFeishuPost } from './feishu-post.js';
 import { parseMediaReference } from './media-policy.js';
 import { equal } from './crypto.js';
-import { BridgeError, type FeishuApp, type Inbound, type FeishuSender } from './types.js';
+import { BridgeError, type FeishuApp, type Inbound, type FeishuSender, type FeishuReplyReceipt } from './types.js';
 import type { FeishuNetwork } from './feishu-network.js';
 const id = z.string().min(1).max(256);
 const messageEventSchema = z.object({ sender: z.object({ sender_type: z.string(), tenant_key: id.optional(), sender_id: z.object({ open_id: id }) }), message: z.object({ message_id: id, chat_id: id, chat_type: z.string(), message_type: z.string(), content: z.string().max(64000), create_time: z.string(), mentions: z.unknown().optional() }) });
@@ -67,7 +68,7 @@ export function decodeFeishu(app: FeishuApp, raw: string, headers: Headers, now 
   return normalizeMessage(app, event, now, mediaCandidate);
 }
 export const silentLarkLogger = { debug() {}, info() {}, warn() {}, error() {}, trace() {} };
-export function createLarkHttp(network?: FeishuNetwork) { const http = network?.http ?? axios.create({ timeout: 10000, maxRedirects: 0, maxContentLength: 262144 }); if (!network) http.interceptors.response.use(response => response.data); return http as unknown as NonNullable<ConstructorParameters<typeof lark.Client>[0]['httpInstance']>; }
+export function createLarkHttp(network?: FeishuNetwork) { const http = network?.http ?? axios.create({ timeout: 10000, maxRedirects: 0, maxContentLength: 262144, maxBodyLength: 4 * 1024 * 1024 + 65536 }); if (!network) http.interceptors.response.use(response => response.data); return http as unknown as NonNullable<ConstructorParameters<typeof lark.Client>[0]['httpInstance']>; }
 export class LarkSender implements FeishuSender {
   private clients = new Map<string, lark.Client>();
   constructor(apps: FeishuApp[], network?: FeishuNetwork) {
@@ -81,15 +82,46 @@ export class LarkSender implements FeishuSender {
     if (typeof token !== 'string' || !token) throw new BridgeError('media_auth_unavailable');
     return token;
   }
+  private outputClient(appId:string) { const client=this.clients.get(appId); if(!client) throw new BridgeError('unknown_app'); return client; }
+  private outputCode(code:unknown) { if(code===0) return; if(typeof code==='number' && Number.isFinite(code)) throw new BridgeError('feishu_output_rejected',502); throw new BridgeError('invalid_output_receipt',502); }
+  async uploadImage(appId:string, bytes:Buffer):Promise<string> {
+    if(!bytes.length || bytes.length>4*1024*1024) throw new BridgeError('media_size_exceeded');
+    // Official SDK builds multipart/form-data; Buffer only, never a ReadStream/path.
+    // Generic official SDK request preserves code + data; im.image.create strips
+    // the envelope, which would lose explicit provider rejection evidence.
+    const result=await this.outputClient(appId).request<{code?:number;data?:{image_key?:string}}>({url:'open-apis/im/v1/images',method:'POST',headers:{'Content-Type':'multipart/form-data'},data:{image_type:'message',image:bytes}});
+    this.outputCode(result?.code);
+    const key=result.data?.image_key;
+    if(!key || !/^img_[A-Za-z0-9_-]{1,240}$/.test(key)) throw new BridgeError('invalid_output_receipt',502);
+    return key;
+  }
+  async sendImage(appId:string,chatId:string,imageKey:string,key:string):Promise<string> {
+    if(!/^img_[A-Za-z0-9_-]{1,240}$/.test(imageKey)) throw new BridgeError('invalid_output_receipt');
+    const result=await this.outputClient(appId).im.message.create({params:{receive_id_type:'chat_id'},data:{receive_id:chatId,msg_type:'image',content:JSON.stringify({image_key:imageKey}),uuid:key}});
+    this.outputCode(result?.code); return result.data?.message_id ?? '';
+  }
+  async sendCard(appId:string,chatId:string,card:unknown,key:string):Promise<string> {
+    const result=await this.outputClient(appId).im.message.create({params:{receive_id_type:'chat_id'},data:{receive_id:chatId,msg_type:'interactive',content:JSON.stringify(card),uuid:key}});
+    this.outputCode(result?.code); return result.data?.message_id ?? '';
+  }
+  async patchCard(appId:string,messageId:string,card:unknown):Promise<void> {
+    if(!/^om_[A-Za-z0-9_-]{1,240}$/.test(messageId)) throw new BridgeError('invalid_output_receipt');
+    const result=await this.outputClient(appId).im.message.patch({path:{message_id:messageId},data:{content:JSON.stringify(card)}});
+    this.outputCode(result?.code);
+  }
   async sendBound(appId: string, chatId: string, text: string, idempotencyKey: string): Promise<string> {
     const client = this.clients.get(appId); if (!client) throw new BridgeError('unknown_app');
     const result = await client.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: chatId, content: JSON.stringify({ text }), msg_type: 'text', uuid: idempotencyKey } });
     if (result?.code !== 0 || !result.data?.message_id) throw new BridgeError('feishu_send_failed', 502);
     return result.data.message_id;
   }
-  async reply(appId: string, messageId: string, text: string, idempotencyKey: string): Promise<void> {
+  async reply(appId: string, messageId: string, text: string, idempotencyKey: string): Promise<FeishuReplyReceipt> {
     const client = this.clients.get(appId); if (!client) throw new BridgeError('unknown_app');
     const result = await client.im.message.reply({ path: { message_id: messageId }, data: { content: JSON.stringify({ text }), msg_type: 'text', uuid: idempotencyKey } });
     if (result?.code !== 0) throw new BridgeError('feishu_send_failed', 502);
+    // An accepted send must not be retried merely because optional receipt fields
+    // are missing or malformed. Never retain the raw response or message content.
+    return sanitizeReplyReceipt({ messageId: result.data?.message_id,
+      rootId: result.data?.root_id, parentId: result.data?.parent_id, threadId: result.data?.thread_id });
   }
 }

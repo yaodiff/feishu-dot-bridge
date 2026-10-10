@@ -1,7 +1,7 @@
 {
   "name": "feishu-dot-bridge",
   "version": "0.1.0",
-  "description": "Personal self-hosted Feishu bridge for your existing dot via authenticated MCP Events",
+  "description": "A self-hosted Feishu bridge for your existing dot, with text messaging and optional image input.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",

@@ -1,6 +1,6 @@
 # Optional image intake
 
-Images are disabled by default. Set `FEISHU_MEDIA_INPUT=images-v1` only when image processing and disclosure through the existing private MCP connection are authorized. Missing/`disabled` keeps the 9-tool text interface; `images-v1` adds `get_event_image` and safe image metadata. Other values fail closed.
+Images are disabled by default. Set `FEISHU_MEDIA_INPUT=images-v1` only when image processing and disclosure through the existing private MCP connection are authorized. Missing/`disabled` keeps the 13-tool text interface; `images-v1` adds `get_event_image` and safe image metadata. Other values fail closed.
 
 The runtime supports PNG/JPEG images only. It has no audio decoder, transcription adapter, model runtime or outbound-media tool. Audio messages produce unsupported notices, without retaining audio references, downloading bytes or requesting a token for audio retrieval. A callback-backed unsupported notice can survive restart; polling-only audio uses the ordinary unsupported text and generic `media_not_available` metadata.
 

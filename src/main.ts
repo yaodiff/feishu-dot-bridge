@@ -21,7 +21,10 @@ process.umask(0o077);
 function env(name: string): string { const v = process.env[name]; if (!v) throw new Error(`Missing ${name}`); return v; }
 // Reject experimental transport selection before reading credentials or opening data.
 const imagesEnabled = mediaInputEnabled(process.env);
-if (imagesEnabled) await verifyImageDecoder();
+const outputImageMode=process.env.FEISHU_IMAGE_OUTPUT ?? 'off';
+if(!['off','on'].includes(outputImageMode)) throw new BridgeError('invalid_image_output_configuration');
+const outputImagesEnabled=outputImageMode==='on';
+if (imagesEnabled || outputImagesEnabled) await verifyImageDecoder();
 const diagnostic = (value: unknown) => { const safe = sanitizeRuntimeDiagnostic(value); if (safe) console.log(JSON.stringify(safe)); };
 const transport = createCallbackTransport(process.env, hostname => console.warn(JSON.stringify({ event: 'callback_host_not_allowed', hostname })), value => diagnostic({ event: 'callback_transport', ...value }));
 const feishuNetwork = createFeishuNetwork(process.env, hostname => console.log(JSON.stringify({ event: 'feishu_ws_host_not_allowed', hostname })));
@@ -33,7 +36,7 @@ const auth = runtime.personalAuth ?? new JwtAuthenticator(runtime.issuer!, `${ru
 const personal = runtime.personalAuth ? { owner: runtime.personalAuth.ownerId, appId: apps[0]!.appId, tenantKey: apps[0]!.tenantKey } : undefined;
 const store = new Store(runtime.databasePath, personal);
 const sender = new LarkSender(apps, feishuNetwork);
-const bridge = new Bridge(store, new SecretBox(Buffer.from(readConfiguredSecret(process.env, 'STORAGE_KEY'), 'base64')), transport, sender, Date.now, personal, diagnostic);
+const bridge = new Bridge(store, new SecretBox(Buffer.from(readConfiguredSecret(process.env, 'STORAGE_KEY'), 'base64')), transport, sender, Date.now, personal, diagnostic, {images:outputImagesEnabled});
 const mediaTransport = imagesEnabled ? new FeishuMediaTransport(apps, appId => sender.mediaAccessToken(appId), process.env) : undefined;
 const media = mediaTransport ? new MediaInputCandidate(bridge, mediaTransport, (_principal, _eventId, kind) => kind === 'image') : undefined;
 const app = makeApp({ authMode: runtime.mode, publicUrl: runtime.baseUrl, issuer: runtime.issuer, apps, allowedOrigins: (process.env.ALLOWED_ORIGINS ?? 'https://chatgpt.com').split(',') }, bridge, auth, media);

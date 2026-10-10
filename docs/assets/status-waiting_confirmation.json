@@ -1,0 +1,62 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "summary": {
+      "content": "等待确认 · 候选已准备，等待发布确认"
+    }
+  },
+  "header": {
+    "title": {
+      "tag": "plain_text",
+      "content": "dot · 等待确认"
+    },
+    "template": "orange"
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "候选已准备，等待发布确认"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "需要执行：检查并确认候选发布"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "原因：发布会影响外部服务"
+        }
+      },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "请打开 dot → Activity，检查对应请求并在原处确认。飞书点击只跳转，不授予 dot 权限。此状态由调用者提交。"
+        }
+      },
+      {
+        "tag": "button",
+        "text": {
+          "tag": "plain_text",
+          "content": "打开 dot"
+        },
+        "type": "primary",
+        "behaviors": [
+          {
+            "type": "open_url",
+            "default_url": "https://chatgpt.com/dots/home"
+          }
+        ]
+      }
+    ]
+  }
+}

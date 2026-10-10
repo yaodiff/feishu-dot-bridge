@@ -28,6 +28,7 @@ function synthetic() {
       const queued = f.bridge.reply(f.alice, { event_id: id, text: 'MOCK reply body' });
       f.store.db.prepare('UPDATE jobs SET state=? WHERE id=?').run(state, queued.reply_id);
     }
+    if (!state) { const claim=f.bridge.handling.claim(f.alice,{event_id:id,request_id:'MOCK_purge_'+n,revision:0}); f.bridge.handling.complete(f.alice,{event_id:id,revision:claim.revision,outcome:'no_reply',reason:'no_response_needed'}); }
     f.store.db.prepare('UPDATE inbox SET timestamp=? WHERE id=?').run(timestamp, id);
     return { id, message };
   }
@@ -38,7 +39,13 @@ function synthetic() {
       .run(state, f.now() - 40 * DAY, f.now() - 39 * DAY, state === 'sent' ? 'om_MOCK_confirmed' : null, queued.sync_id);
     return { id: queued.sync_id, input };
   }
-  function downgrade() { f.store.db.exec('DROP TABLE mirror_outbox; DROP TABLE content_dispositions; PRAGMA user_version=1'); }
+  function downgrade(version: 1 | 2 | 3 | 4 | 5 = 1) {
+    if (version < 5) f.store.db.exec('DROP TABLE output_chunks; DROP TABLE output_media; DROP TABLE output_outbox');
+    if (version < 4) f.store.db.exec('DROP TABLE event_handling');
+    if (version < 3) for (const name of ['remoteMessageId', 'rootMessageId', 'parentMessageId', 'threadId', 'completedAt']) f.store.db.exec('ALTER TABLE jobs DROP COLUMN ' + name);
+    if (version === 1) f.store.db.exec('DROP TABLE mirror_outbox; DROP TABLE content_dispositions');
+    f.store.db.exec('PRAGMA user_version=' + version);
+  }
   return { ...f, dir, path, binding, old, inbox, mirror, downgrade, cleanup() { rmSync(dir, { recursive: true, force: true }); } };
 }
 function rows(path: string) {
@@ -51,17 +58,17 @@ function rows(path: string) {
 }
 function alter(path: string, sql: string) { const db = new DatabaseSync(path); try { db.exec(sql); } finally { db.close(); } }
 
-for (const version of [1, 2] as const) test(`schema ${version}: scoped cleanup keeps outstanding work, receipts and boundary events; dry run matches execution`, () => {
+for (const version of [1, 2, 3, 4, 5] as const) test(`schema ${version}: scoped cleanup keeps outstanding work, receipts and boundary events; dry run matches execution`, () => {
   const f = synthetic();
   try {
-    const removed = [f.inbox(), ...['sent', 'dead', 'cancelled', 'blocked'].map(s => f.inbox(s, version === 2))];
-    const kept = ['pending', 'sending', 'uncertain'].map(s => f.inbox(s, version === 2));
+    const removed = [f.inbox(), ...['sent', 'dead', 'cancelled', 'blocked'].map(s => f.inbox(s, version >= 2))];
+    const kept = ['pending', 'sending', 'uncertain'].map(s => f.inbox(s, version >= 2));
     kept.push(f.inbox(undefined, false, new Date(f.now() - 30 * DAY).toISOString()));
     kept.push(f.inbox(undefined, false, new Date(f.now()).toISOString()));
-    const mixed = f.inbox('sent', version === 2); kept.push(mixed);
+    const mixed = f.inbox('sent', version >= 2); kept.push(mixed);
     f.store.db.prepare('INSERT INTO jobs(id,kind,lane,inboxId,payload,state) VALUES (?,?,?,?,?,?)').run('MOCK_mixed', 'event', 'event:MOCK', mixed.id, '{}', 'pending');
     f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_expired', f.alice.id, f.now() - 1);
-    if (version === 1) f.downgrade();
+    f.downgrade(version);
     f.store.close();
     const before = rows(f.path), bytes = readFileSync(f.path);
     const dry = runMaintenance(['purge', '--dry-run'], f.path, f.now());
@@ -72,7 +79,7 @@ for (const version of [1, 2] as const) test(`schema ${version}: scoped cleanup k
     const after = rows(f.path); assert.deepEqual(after.receipts, before.receipts); assert.deepEqual(after.version, before.version);
     assert.deepEqual((after.inbox as { id: string }[]).map(r => r.id), kept.map(r => r.id).sort((a, b) => (before.inbox as { id: string }[]).findIndex(x => x.id === a) - (before.inbox as { id: string }[]).findIndex(x => x.id === b)));
     assert.deepEqual((after.jobs as { state: string }[]).map(j => j.state), ['pending', 'sending', 'uncertain', 'sent', 'pending']);
-    if (version === 2) assert.equal((after.content_dispositions as unknown[]).length, 4);
+    if (version >= 2) assert.equal((after.content_dispositions as unknown[]).length, 4);
     const repeated = runMaintenance(['purge'], f.path, f.now()); assert.ok(Object.values(repeated.counts!).every(n => n === 0)); assert.deepEqual(rows(f.path), after);
   } finally { f.cleanup(); }
 });
@@ -152,7 +159,7 @@ test('terminal mirrors and cleaned inboxes cannot resend/reingest after the remo
 test('schema 2: child-first FK ordering and any failure roll back all earlier deletions', () => {
   const f = synthetic();
   try {
-    f.inbox('sent', true); f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_expired', f.alice.id, f.now() - 1); f.store.close();
+    f.inbox('sent', true); f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_expired', f.alice.id, f.now() - 1); f.downgrade(2); f.store.close();
     const before = rows(f.path), original = DatabaseSync.prototype.prepare, sequence: string[] = [];
     try {
       DatabaseSync.prototype.prepare = function(sql: string) {
@@ -168,13 +175,13 @@ test('schema 2: child-first FK ordering and any failure roll back all earlier de
   } finally { f.cleanup(); }
 });
 
-for (const version of [1, 2] as const) test(`schema ${version}: revoke validates first, is atomic, and never recovers sending work`, () => {
+for (const version of [1, 2, 3, 4, 5] as const) test(`schema ${version}: revoke validates first, is atomic, and never recovers sending work`, () => {
   const f = synthetic(), owner = 'a'.repeat(64);
   try {
-    f.inbox('sending'); if (version === 2) { f.mirror('pending'); f.mirror('sending'); f.mirror('uncertain'); }
-    for (const table of ['bindings', 'inbox', 'pairs', ...(version === 2 ? ['mirror_outbox'] : [])]) f.store.db.prepare(`UPDATE ${table} SET owner=?`).run(owner);
+    f.inbox('sending'); if (version >= 2) { f.mirror('pending'); f.mirror('sending'); f.mirror('uncertain'); }
+    for (const table of ['bindings', 'inbox', 'pairs', ...(version >= 2 ? ['mirror_outbox'] : [])]) f.store.db.prepare(`UPDATE ${table} SET owner=?`).run(owner);
     f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_revoke_pair', owner, f.now() + DAY);
-    if (version === 1) f.downgrade(); f.store.close();
+    f.downgrade(version); f.store.close();
     const before = rows(f.path); runMaintenance(['revoke', owner, '--dry-run'], f.path, f.now()); assert.deepEqual(rows(f.path), before);
     const original = DatabaseSync.prototype.prepare;
     try {
@@ -185,7 +192,7 @@ for (const version of [1, 2] as const) test(`schema ${version}: revoke validates
     assert.equal(runMaintenance(['revoke', owner], f.path, f.now()).event, 'account_revoked');
     const after = rows(f.path); assert.equal((after.bindings as { active: number }[])[0]!.active, 0); assert.deepEqual(after.pairs, []);
     assert.equal((after.jobs as { state: string }[])[0]!.state, 'sending');
-    if (version === 2) assert.deepEqual((after.mirror_outbox as { state: string }[]).map(r => r.state), ['cancelled', 'sending', 'uncertain']);
+    if (version >= 2) assert.deepEqual((after.mirror_outbox as { state: string }[]).map(r => r.state), ['cancelled', 'sending', 'uncertain']);
     runMaintenance(['revoke', owner], f.path, f.now()); assert.deepEqual(rows(f.path), after);
   } finally { f.cleanup(); }
 });
@@ -223,4 +230,31 @@ for (const [name, sql] of [
     for (const args of [['purge'], ['purge', '--dry-run']]) assert.throws(() => runMaintenance(args, f.path, f.now()));
     assert.deepEqual(rows(f.path), before); assert.deepEqual(readFileSync(f.path), bytes);
   } finally { f.cleanup(); }
+});
+test('schema5 purge removes expired staging chunks but retains media and output dedupe receipts',()=>{
+ const f=synthetic();try{
+ const media='media_'+hash('MOCK_media');
+ f.store.db.prepare('INSERT INTO output_media(id,owner,bindingId,sourceId,digest,mime,generatedAt,expiresAt,totalChunks) VALUES (?,?,?,?,?,?,?,?,?)').run(media,f.alice.id,f.binding.id,'MOCK_source',hash('MOCK_image'),'image/png',f.now()-1000,f.now()-1,1);
+ f.store.db.prepare('INSERT INTO output_chunks VALUES (?,?,?,?)').run(media,0,hash('MOCK_chunk'),'MOCK_encrypted');
+ const job=f.bridge.output.card(f.alice,{binding_id:f.binding.id,request_id:'MOCK_card',task_id:'MOCK_task',expected_revision:0,status:'processing',summary:'MOCK progress',existing_user_authorization:true});f.store.close();
+ const before=rows(f.path);runMaintenance(['purge','--dry-run'],f.path,f.now());assert.deepEqual(rows(f.path),before);
+ runMaintenance(['purge'],f.path,f.now());const after=rows(f.path);assert.equal((after.output_chunks as unknown[]).length,0);assert.equal((after.output_media as unknown[]).length,1);assert.equal((after.output_outbox as {id:string}[])[0]!.id,job.output_id);
+ }finally{f.cleanup();}
+});
+test('schema5 offline revoke closes live media atomically and retains dedupe tombstones',()=>{
+ const f=synthetic(),owner='b'.repeat(64);try {
+ const media='media_'+hash('MOCK_live_media');
+ f.store.db.prepare('INSERT INTO output_media(id,owner,bindingId,sourceId,digest,mime,generatedAt,expiresAt,totalChunks) VALUES (?,?,?,?,?,?,?,?,?)').run(media,f.alice.id,f.binding.id,'MOCK_live',hash('MOCK_image'),'image/png',f.now(),f.now()+60000,1);
+ for(const table of ['bindings','output_media'])f.store.db.prepare(`UPDATE ${table} SET owner=?`).run(owner);
+ f.store.db.prepare('INSERT INTO output_chunks VALUES (?,?,?,?)').run(media,0,hash('MOCK_chunk'),'MOCK_encrypted');f.store.close();
+ const before=rows(f.path);runMaintenance(['revoke',owner,'--dry-run'],f.path,f.now());assert.deepEqual(rows(f.path),before);
+ const original=DatabaseSync.prototype.prepare;
+ try {
+ DatabaseSync.prototype.prepare=function(sql:string){if(sql.startsWith('DELETE FROM output_chunks'))throw new Error('MOCK_media_delete');return original.call(this,sql);};
+ assert.throws(()=>runMaintenance(['revoke',owner],f.path,f.now()),/MOCK_media_delete/);
+ }finally{DatabaseSync.prototype.prepare=original;}
+ assert.deepEqual(rows(f.path),before);
+ runMaintenance(['revoke',owner],f.path,f.now());const after=rows(f.path);
+ assert.equal((after.output_media as {consumed:number}[])[0]!.consumed,1);assert.equal((after.output_chunks as unknown[]).length,0);
+ }finally{f.cleanup();}
 });

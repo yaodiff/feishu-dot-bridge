@@ -1,0 +1,27 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "summary": {
+      "content": "处理中 · 合成任务状态更新"
+    }
+  },
+  "header": {
+    "title": {
+      "tag": "plain_text",
+      "content": "dot · 处理中"
+    },
+    "template": "blue"
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "plain_text",
+          "content": "合成任务状态更新"
+        }
+      }
+    ]
+  }
+}

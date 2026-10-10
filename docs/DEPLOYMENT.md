@@ -88,7 +88,7 @@ Tunnel runtime key 和 `X-Bridge-Token` 是不同秘密。静态头只识别安�
 
 在产品支持的界面添加该 Tunnel。认证 “None” 表示不另走 OAuth，而非关闭后端密钥。实际账号须支持 MCP Events 组合；遇到不支持，停在具体兼容问题，不能改成无认证服务。
 
-核实实际可调用目录包含：`begin_binding`、`binding_status`、`unlink_binding`、`reply_to_feishu`、`delivery_status`、`list_pending_events`、`get_event`、`send_to_bound_feishu`、`mirror_delivery_status`，以及 `feishu.message.created` 事件。图片模式另有 `get_event_image`。界面计数不能代替实际调用验证。
+核实实际可调用目录包含：`begin_binding`、`binding_status`、`unlink_binding`、`reply_to_feishu`、`delivery_status`、`list_pending_events`、`get_event`、`send_to_bound_feishu`、`mirror_delivery_status`、`get_event_handling`、`list_event_alerts`、`claim_event_processing`、`complete_event_handling`，以及 `submit_feishu_status`、`output_delivery_status`、`list_output_alerts`，默认共 16 个工具，以及 `feishu.message.created` 事件。`FEISHU_MEDIA_INPUT=images-v1` 增加 `get_event_image`（17 个）；`FEISHU_IMAGE_OUTPUT=on` 增加 `stage_generated_image_chunk` 和 `send_generated_image_to_feishu`（只开输出 18 个，全开 19 个）。输入／输出分别启用，仅支持受限 PNG/JPEG；卡片状态必须显式提交，不能自动捕获所有 dot 审批或通过飞书批准权限。启用输出前核实权限、Linux 解码器和实际字节交接，见[输出指南](OUTPUT_DELIVERY_CANDIDATE.md)。界面计数不能代替实际调用验证。
 
 让 dot 生成配对命令，由本人在五分钟内发到目标飞书机器人私聊，再检查绑定。其他人的私聊、机器人和群聊不会被路由给主人。随后明确授权订阅、回复范围和所需文字镜像；配对不是任意行动授权。
 
@@ -100,8 +100,26 @@ Tunnel runtime key 和 `X-Bridge-Token` 是不同秘密。静态头只识别安�
 
 静态认证密钥不自动每小时更换；每次认证的内部租期最多一小时，订阅不超过该租期。轮换密钥需同步 Tunnel 与 bridge，并保持 `INSTALLATION_ID` 不变。停止 Tunnel 或换密钥不会立即撤回已持久化的出站订阅；立即停止应先解绑或离线 revoke。
 
-消息正文、标识与 callback URL 在 SQLite 中可读；只有 callback 签名密钥使用 storage-key 加密。保护磁盘与备份，不记录请求头、正文或完整 URL。直接更换 storage-key 会使旧加密数据不可读。
+消息正文、标识与 callback URL 在 SQLite 中可读；callback 签名密钥、输出图片分块和排队输出载荷使用 storage-key 加密；其他消息正文仍可读。保护磁盘与备份，不记录请求头、正文或完整 URL。直接更换 storage-key 会使旧加密数据不可读。
 
-升级 schema v2 前停进程、取得一致私有备份，保留身份/配置/匹配密钥并演练恢复。不要仅复制可能带 WAL 的活动数据库主文件，也不要通过旧二进制、删表或降低版本号回滚。详见 [schema 恢复边界](TEXT_MIRROR_V1.md#schema-v2-upgrade-and-recovery)。
+升级 schema v5 前停进程、取得一致私有备份，保留身份/配置/匹配密钥并演练恢复。不要仅复制可能带 WAL 的活动数据库主文件，也不要通过旧二进制、删表或降低版本号回滚。详见 [schema 恢复边界](TEXT_MIRROR_V1.md#schema-v2-upgrade-and-recovery)。
 
 [离线维护](OFFLINE_MAINTENANCE.md)要求 Linux `/proc/self/fd`、私有文件和可信静止主机，执行前必须停所有数据库使用者及其自动重启。先预览再执行经授权的写入。它仅清理符合条件的旧收件历史；全部回执与镜像正文仍保留，无自动 30 天删除策略。
+
+Schema v4 增加逐事件处理决策和有限租期。部署前核对[迁移和调用方契约](EVENT_HANDLING.md)。独立主机监管仅保持 bridge/Tunnel 运行，不会替 dot 生成或提交答案；调用方在唤醒时检查漏项并遍历全部告警页，没有独立自动补发调度器。断连恢复边界见 [README](../README.md#先试再长期运行)，真实短时验收见[验收记录](ACCEPTANCE.md#live-merged-text-check-2026-10-10)。
+
+## 8. 断连与恢复的范围
+
+主机进程监管使 bridge 和 Tunnel 能独立于临时开发会话运行；它不替 dot 生成或提交答案。临时飞书断线由 SDK 重连，终止性错误由监管器重启。`/healthz` 只表示进程存活，不能替代端到端收发检查。
+
+数据库恢复仅适用于已持久化的事件和任务。callback 保留原有有限重试规则；重启时发送中的回复变为 `uncertain`，必须核对目的端，不能自动重发。文字镜像保留原有重试语义，不保证跨平台 exactly-once。断线期间未入库的消息没有历史回填保证；订阅到期需要重新授权，图片引用最长 15 分钟且重启后不可恢复。恢复读取和处理租期恢复本身均不发送回复。
+
+调用方在被唤醒时检查所有告警页，记录每条输入的结果；没有全天独立漏项检查或自动补发调度器。等待授权、不回复及已被后续答案覆盖的输入不能按普通待回复事件补发。详见[处理契约](EVENT_HANDLING.md)。
+
+开发测试曾观察到临时云端会话消失和网络政策拒绝；这只是具体环境的观察，不是产品永久限制。独立主机也要逐安装验证网络、持久性、监管和长时间在线表现，短时测试不能证明优于云端。
+
+## 9. 可选传输与兼容模式
+
+默认个人布局采用同主机 bridge 与官方 Tunnel。需要不同传输时先核对[callback 受控代理](CLOUD_PROXY_CANDIDATE.md)、[连接池](CALLBACK_POOL_CANDIDATE.md)与[飞书受控代理](FEISHU_MANAGED_PROXY.md)的要求，不更改安全策略来绕过网络拒绝。
+
+[OAuth 兼容模式](OAUTH_COMPATIBILITY.md)需显式选择。Docker/Compose 模板适用于该兼容模式，不能直接当作个人 loopback 布局的即用部署；个人容器网络须另行设计和验收，不能通过放开监听来解决连接问题。

@@ -11,7 +11,7 @@ test('MOCK HTTP integration uses actual MCP v2 SDK and signed/encrypted Feishu c
     const metadata = await app(new Request('https://bridge.example/.well-known/oauth-protected-resource/mcp')); assert.equal((await metadata.json()).resource, 'https://bridge.example/mcp');
     const noAuth = await app(rpc('server/discover', {}, { authorization: '' })); assert.equal(noAuth.status, 401); assert.match(noAuth.headers.get('www-authenticate')!, /resource_metadata/);
     const discover = await app(rpc('server/discover')); const discovered = await discover.json(); assert.equal(discover.status, 200, JSON.stringify(discovered)); assert.deepEqual(discovered.result.capabilities.events, {}); assert.equal(discovered.result.resultType, 'complete');
-    const list = await (await app(rpc('tools/list'))).json(); assert.equal(list.result.tools.length, 9);
+    const list = await (await app(rpc('tools/list'))).json(); assert.equal(list.result.tools.length, 16);
     const pairing = await (await app(rpc('tools/call', { name: 'begin_binding', arguments: {} }))).json(); const command = JSON.parse(pairing.result.content[0].text).command;
     assert.ok(command, JSON.stringify(pairing));
     const c = encryptedCallback(feishuPayload(command, { messageId: 'om_pair' })); assert.equal((await app(new Request('https://bridge.example/feishu/events/cli_mock', { method: 'POST', headers: c.headers, body: c.raw }))).status, 200);

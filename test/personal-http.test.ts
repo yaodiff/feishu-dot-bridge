@@ -55,7 +55,7 @@ test('actual main process boots loopback-only personal service with synthetic te
     assert.match(output,/"mode":"personal-tunnel"/);
     const origin=`http://127.0.0.1:${port}`;assert.equal((await fetch(origin+'/healthz')).status,200);
     assert.equal((await fetch(origin+'/mcp',requestParts('server/discover'))).status,401);
-    const catalog=await(await fetch(origin+'/mcp',requestParts('tools/list',{}, {'X-Bridge-Token':MOCK_TOKEN_A}))).json();assert.equal(catalog.result.tools.length,9);
+    const catalog=await(await fetch(origin+'/mcp',requestParts('tools/list',{}, {'X-Bridge-Token':MOCK_TOKEN_A}))).json();assert.equal(catalog.result.tools.length,16);
     child.kill('SIGTERM');const [code]=await once(child,'exit');assert.equal(code,0);
   } finally {if(child.exitCode===null){child.kill('SIGKILL');await once(child,'exit');}rmSync(dir,{recursive:true,force:true});}
 });

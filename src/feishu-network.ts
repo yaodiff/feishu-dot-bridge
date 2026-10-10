@@ -128,7 +128,7 @@ export function createFeishuNetwork(env: NodeJS.ProcessEnv = process.env, onBloc
     // SDK requests cannot turn a managed request into a direct, redirected or
     // unbounded one, or override the TLS agent / proxy policy per request.
     config.proxy = false; config.adapter = 'http'; config.maxRedirects = 0;
-    config.maxContentLength = MAX_BODY; config.maxBodyLength = MAX_BODY;
+    config.maxContentLength = MAX_BODY; config.maxBodyLength = url.pathname === '/open-apis/im/v1/images' && config.method?.toUpperCase() === 'POST' ? 4 * 1024 * 1024 + 65536 : MAX_BODY;
     config.responseType = 'json'; config.validateStatus = status => status >= 200 && status < 300;
     config.timeout = config.timeout && config.timeout > 0 ? Math.min(config.timeout, REQUEST_MS) : REQUEST_MS;
     const agent = new ManagedFeishuAgent(proxy, false);
