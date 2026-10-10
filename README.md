@@ -33,6 +33,42 @@
 
 默认有 **16 个 MCP 工具**，包括状态提交与输出查询。`FEISHU_MEDIA_INPUT=images-v1` 增加 `get_event_image`；`FEISHU_IMAGE_OUTPUT=on` 增加图片分块暂存与发送两个工具。只开输入共 17 个，只开输出共 18 个，两者全开共 19 个。输入和输出分别启用，仅支持受限 PNG/JPEG；图片处理、披露与状态发送仍需明确授权。不支持语音或转写，也不会自动捕获所有 dot 回复或审批；飞书卡片点击不批准 dot 权限。
 
+## 架构：两条独立通路
+
+```text
+[A] Intake + notification (authorized subscription; not a reply)
+Feishu DM --WebSocket--> bridge --MCP Events / callback--> dot
+                            |
+                            +--> SQLite: inbox + handling ledger
+
+[B] Authorized output (dot must call explicitly)
+dot --MCP tools--> Official OpenAI Tunnel --loopback MCP--> bridge
+                                                           |
+                          Feishu DM <--Feishu API-----------+
+                                                           |
+                          SQLite: outbox + receipts <-------+
+```
+
+`[A]` 把新收件持久化并通知／唤醒 dot；callback 接受不表示处理完成。`[B]` 由 dot 经本人专属官方 Tunnel 调用工具，bridge 才会发送文字、受限 PNG/JPEG 或状态卡片。入站、处理决策、输出队列与回执分别记录；`sent` 只代表 API 接受，`uncertain` 不自动重发。bridge 不运行模型，也不会自动捕获所有 dot 回复或审批。
+
+## 使用效果示例
+
+<picture>
+  <source media="(max-width: 600px)" srcset="docs/assets/usage-examples.zh.mobile.svg">
+  <img src="docs/assets/usage-examples.zh.svg" alt="合成示例，非真实聊天截图：授权文字回复、实际字节图片投递、同一卡片进度更新、只跳转到官方 dot 入口的等待确认卡片。" width="1440">
+</picture>
+
+*原创合成示例，非真实聊天截图，不包含用户私聊、账户或回执标识。布局用于说明行为，不保证各客户端呈现一致；真实验收另见[验收记录](docs/ACCEPTANCE.md)。*
+
+| 示例 | 实际需要的调用与边界 |
+| --- | --- |
+| 文字回复 | `reply_to_feishu` 将经授权回复送回原消息 |
+| 当前生成图片 | 受信适配器提供当前用户要求图片的实际字节；开启输出后暂存并真实上传／发送，分别检查两份回执。私有链接不能代替图片 |
+| 进度更新 | 调用者显式提交状态；普通更新 PATCH 同一卡片，完成不是自动监听 dot 得出的结论 |
+| 等待确认 | 重要等待另发卡片，写明动作与原因；按钮打开官方 dot 入口，用户在原 Activity 请求中确认，飞书点击不授予权限 |
+
+图片输入和输出分别启用，仅支持受限 PNG/JPEG；不支持语音或转写。所有输出只面向本人的当前绑定私聊，仍需明确授权；这是个人自部署连接，不是共享托管服务。
+
 ## 开始前准备好
 
 - **主机：** Linux/macOS、Node.js 24+、npm，以及持久磁盘、进程监管和必要的出站 HTTPS/WebSocket 连通性。图片模式另需 Linux `/usr/bin/prlimit` 和锁定的 `sharp` 依赖。
@@ -95,5 +131,3 @@ npm run demo
 ## 许可证
 
 源码采用 [MIT](LICENSE)。图片依赖与预编译原生组件另有许可证；分发前请核对[第三方许可与义务](docs/DEPENDENCY_LICENSES.md)。
-
-当前生成图片发回与显式状态卡片候选见 [输出投递说明](docs/OUTPUT_DELIVERY_CANDIDATE.md)。图片输出默认关闭；状态必须由调用者提交，不会自动捕获所有 dot 回复或审批。
