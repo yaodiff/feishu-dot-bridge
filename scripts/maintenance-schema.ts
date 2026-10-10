@@ -17,3 +17,11 @@ CREATE TABLE IF NOT EXISTS content_dispositions (eventId TEXT PRIMARY KEY REFERE
 CREATE TABLE IF NOT EXISTS mirror_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL, bindingId TEXT NOT NULL REFERENCES bindings(id), appId TEXT NOT NULL, tenantKey TEXT NOT NULL, openId TEXT NOT NULL, chatId TEXT NOT NULL, sourceId TEXT NOT NULL, sourceRole TEXT NOT NULL CHECK(sourceRole IN ('user','assistant')), contentStatus TEXT CHECK(contentStatus IN ('credential_blocked','unsupported')), payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, nextAt INTEGER NOT NULL DEFAULT 0, firstAttemptAt INTEGER, accessUntil INTEGER NOT NULL, remoteMessageId TEXT, UNIQUE(owner,bindingId,sourceId));
 CREATE INDEX IF NOT EXISTS mirror_pending ON mirror_outbox(state,nextAt,seq);
 `;
+
+export const schema3 = schema2 + `
+ALTER TABLE jobs ADD COLUMN remoteMessageId TEXT;
+ALTER TABLE jobs ADD COLUMN rootMessageId TEXT;
+ALTER TABLE jobs ADD COLUMN parentMessageId TEXT;
+ALTER TABLE jobs ADD COLUMN threadId TEXT;
+ALTER TABLE jobs ADD COLUMN completedAt INTEGER;
+`;

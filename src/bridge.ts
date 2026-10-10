@@ -1,3 +1,4 @@
+import { sanitizeReplyReceipt } from './reply-receipt.js';
 import { classifyText } from './content-safety.js';
 import { mediaNoticeSchema, type MediaNotice } from './media-policy.js';
 import { Webhook } from 'standardwebhooks';
@@ -173,7 +174,22 @@ export class Bridge {
     }
     return true;
   }
-  deliveryStatus(p: Principal, eventId: string) { this.authorize(p); const inbox = this.store.inbox(eventId); if (!inbox || inbox.owner !== p.id || !this.store.bindingById(inbox.bindingId)) throw new BridgeError('event_not_found', 403); const job = this.store.job(`reply_${hash(eventId)}`); return { event_id: eventId, state: job?.state ?? 'not_queued', attempts: job?.attempts ?? 0 }; }
+  deliveryStatus(p: Principal, eventId: string) {
+    this.authorize(p);
+    const inbox = this.store.inbox(eventId);
+    if (!inbox || inbox.owner !== p.id || !this.store.bindingById(inbox.bindingId)) throw new BridgeError('event_not_found', 403);
+    const job = this.store.job('reply_' + hash(eventId));
+    const receipt = sanitizeReplyReceipt({ messageId: job?.remoteMessageId,
+      rootId: job?.rootMessageId, parentId: job?.parentMessageId, threadId: job?.threadId });
+    const completedAt = job?.completedAt;
+    return { event_id: eventId, state: job?.state ?? 'not_queued', attempts: job?.attempts ?? 0,
+      ...(receipt.messageId ? { message_id: receipt.messageId } : {}),
+      ...(receipt.rootId ? { root_id: receipt.rootId } : {}),
+      ...(receipt.parentId ? { parent_id: receipt.parentId } : {}),
+      ...(receipt.threadId ? { thread_id: receipt.threadId } : {}),
+      ...(completedAt != null && Number.isSafeInteger(completedAt) && completedAt >= 0 && completedAt <= 8640000000000000
+        ? { completed_at: new Date(completedAt).toISOString() } : {}) };
+  }
   private eventReadBinding(p: Principal): Binding | undefined {
     const binding = this.store.binding(p.id);
     if (this.personal && binding && (binding.appId !== this.personal.appId || binding.tenantKey !== this.personal.tenantKey)) return undefined;
@@ -233,6 +249,7 @@ export class Bridge {
         if (!inbox || !binding || (this.personal && (inbox.owner !== this.personal.owner || inbox.appId !== this.personal.appId || inbox.tenantKey !== this.personal.tenantKey)) || this.store.isRevoked(inbox.owner) || (job.kind === 'event' && (!sub || !sub.active || sub.expiresAt <= this.now() || sub.bindingId !== binding.id))) { this.setState(job, 'cancelled'); continue; }
         if (job.kind === 'reply' && ((job.firstAttemptAt !== null && this.now() - job.firstAttemptAt >= 55 * 60000) || job.accessUntil <= this.now())) { this.setState(job, job.firstAttemptAt === null ? 'cancelled' : 'uncertain'); continue; }
         this.store.db.prepare("UPDATE jobs SET state='sending',attempts=attempts+1,firstAttemptAt=COALESCE(firstAttemptAt,?) WHERE id=?").run(this.now(), job.id);
+        let acceptedReply = false;
         try {
           if (job.kind === 'event' && sub) {
             // Gate legacy queued events too, without forwarding suspect bodies.
@@ -246,9 +263,17 @@ export class Bridge {
             // UUID length <=50; stable across retry and crash. Destination is NEVER supplied by a tool caller.
             const text = (JSON.parse(job.payload) as { text: string }).text;
             if (typeof text !== 'string' || classifyText(text) === 'credential') { this.setState(job, 'blocked'); continue; }
-            await this.sender.reply(inbox.appId, inbox.messageId, text, hash(job.id).slice(0, 32)); this.setState(job, 'sent');
+            const rawReceipt = await this.sender.reply(inbox.appId, inbox.messageId, text, hash(job.id).slice(0, 32));
+            acceptedReply = true;
+            const receipt = sanitizeReplyReceipt(rawReceipt);
+            this.store.db.prepare("UPDATE jobs SET state='sent',remoteMessageId=?,rootMessageId=?,parentMessageId=?,threadId=?,completedAt=? WHERE id=?")
+              .run(receipt?.messageId ?? null, receipt?.rootId ?? null, receipt?.parentId ?? null, receipt?.threadId ?? null, this.now(), job.id);
           }
-        } catch { this.retry(job); }
+        } catch {
+          // The API already accepted this reply: failed local receipt persistence
+          // must not enqueue another send. An uncertain reservation stays terminal.
+          if (acceptedReply) this.setState(job, 'uncertain'); else this.retry(job);
+        }
       }
     } finally { this.pumping = false; }
     return processed;

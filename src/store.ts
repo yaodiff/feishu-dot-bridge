@@ -16,7 +16,8 @@ export class Store {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
-    if (Number(this.db.prepare('PRAGMA user_version').get()!.user_version) > 2) { this.db.close(); throw new Error('Unsupported database schema version'); }
+    const schemaVersion = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
+    if (schemaVersion > 3) { this.db.close(); throw new Error('Unsupported database schema version'); }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS bindings (id TEXT PRIMARY KEY, owner TEXT NOT NULL, appId TEXT NOT NULL, tenantKey TEXT NOT NULL, openId TEXT NOT NULL, chatId TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
       CREATE UNIQUE INDEX IF NOT EXISTS binding_identity ON bindings(appId,tenantKey,openId) WHERE active=1;
@@ -33,14 +34,24 @@ export class Store {
     // Additive migration only after verifying that the existing database belongs to this installation.
     this.db.exec(`BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS content_dispositions (eventId TEXT PRIMARY KEY REFERENCES inbox(id), status TEXT NOT NULL CHECK(status IN ('credential_blocked','unsupported')));
       CREATE TABLE IF NOT EXISTS mirror_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL, bindingId TEXT NOT NULL REFERENCES bindings(id), appId TEXT NOT NULL, tenantKey TEXT NOT NULL, openId TEXT NOT NULL, chatId TEXT NOT NULL, sourceId TEXT NOT NULL, sourceRole TEXT NOT NULL CHECK(sourceRole IN ('user','assistant')), contentStatus TEXT CHECK(contentStatus IN ('credential_blocked','unsupported')), payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, nextAt INTEGER NOT NULL DEFAULT 0, firstAttemptAt INTEGER, accessUntil INTEGER NOT NULL, remoteMessageId TEXT, UNIQUE(owner,bindingId,sourceId));
-      CREATE INDEX IF NOT EXISTS mirror_pending ON mirror_outbox(state,nextAt,seq); PRAGMA user_version=2; COMMIT;`);
+      CREATE INDEX IF NOT EXISTS mirror_pending ON mirror_outbox(state,nextAt,seq); PRAGMA user_version=${Math.max(2, schemaVersion)}; COMMIT;`);
     if (personal) {
       if (this.db.prepare('SELECT 1 FROM mirror_outbox WHERE owner!=? OR appId!=? OR tenantKey!=? LIMIT 1').get(personal.owner, personal.appId, personal.tenantKey)) { this.db.close(); throw new Error('Mirror outbox belongs to a different installation'); }
     }
+    // v3 stores only bounded reply receipt metadata. History remains NULL; no
+    // backfill, network lookup or replay is performed to manufacture old receipts.
+    if (schemaVersion < 3) this.transaction(() => {
+      const columns = new Set(this.db.prepare('PRAGMA table_info(jobs)').all().map(row => row.name));
+      for (const [name, type] of [['remoteMessageId', 'TEXT'], ['rootMessageId', 'TEXT'], ['parentMessageId', 'TEXT'], ['threadId', 'TEXT'], ['completedAt', 'INTEGER']]) {
+        if (!columns.has(name)) this.db.exec('ALTER TABLE jobs ADD COLUMN ' + name + ' ' + type);
+      }
+      this.db.exec('PRAGMA user_version=3');
+    });
     this.db.exec(`UPDATE mirror_outbox SET state='pending' WHERE state='sending'`);
-    // One process/worker per database: a crash can leave an accepted remote send uncertain.
-    // Keep the same event ID / Feishu uuid on recovery; never mint a fresh ID.
-    this.db.exec(`UPDATE jobs SET state='pending' WHERE state='sending'`);
+    // A sending reply may already have been accepted, including when both the
+    // receipt write and uncertain fallback failed. Startup must not replay it.
+    // Callback notifications retain their separate at-least-once recovery.
+    this.db.exec(`UPDATE jobs SET state=CASE WHEN kind='reply' THEN 'uncertain' ELSE 'pending' END WHERE state='sending'`);
   }
   transaction<T>(fn: () => T): T { this.db.exec('BEGIN IMMEDIATE'); try { const value = fn(); this.db.exec('COMMIT'); return value; } catch (e) { this.db.exec('ROLLBACK'); throw e; } }
   binding(owner: string): Binding | undefined { return this.db.prepare('SELECT * FROM bindings WHERE owner=? AND active=1').get(owner) as Binding | undefined; }

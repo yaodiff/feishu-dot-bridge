@@ -38,7 +38,11 @@ function synthetic() {
       .run(state, f.now() - 40 * DAY, f.now() - 39 * DAY, state === 'sent' ? 'om_MOCK_confirmed' : null, queued.sync_id);
     return { id: queued.sync_id, input };
   }
-  function downgrade() { f.store.db.exec('DROP TABLE mirror_outbox; DROP TABLE content_dispositions; PRAGMA user_version=1'); }
+  function downgrade(version: 1 | 2 | 3 = 1) {
+    if (version < 3) for (const name of ['remoteMessageId', 'rootMessageId', 'parentMessageId', 'threadId', 'completedAt']) f.store.db.exec('ALTER TABLE jobs DROP COLUMN ' + name);
+    if (version === 1) f.store.db.exec('DROP TABLE mirror_outbox; DROP TABLE content_dispositions');
+    f.store.db.exec('PRAGMA user_version=' + version);
+  }
   return { ...f, dir, path, binding, old, inbox, mirror, downgrade, cleanup() { rmSync(dir, { recursive: true, force: true }); } };
 }
 function rows(path: string) {
@@ -51,17 +55,17 @@ function rows(path: string) {
 }
 function alter(path: string, sql: string) { const db = new DatabaseSync(path); try { db.exec(sql); } finally { db.close(); } }
 
-for (const version of [1, 2] as const) test(`schema ${version}: scoped cleanup keeps outstanding work, receipts and boundary events; dry run matches execution`, () => {
+for (const version of [1, 2, 3] as const) test(`schema ${version}: scoped cleanup keeps outstanding work, receipts and boundary events; dry run matches execution`, () => {
   const f = synthetic();
   try {
-    const removed = [f.inbox(), ...['sent', 'dead', 'cancelled', 'blocked'].map(s => f.inbox(s, version === 2))];
-    const kept = ['pending', 'sending', 'uncertain'].map(s => f.inbox(s, version === 2));
+    const removed = [f.inbox(), ...['sent', 'dead', 'cancelled', 'blocked'].map(s => f.inbox(s, version >= 2))];
+    const kept = ['pending', 'sending', 'uncertain'].map(s => f.inbox(s, version >= 2));
     kept.push(f.inbox(undefined, false, new Date(f.now() - 30 * DAY).toISOString()));
     kept.push(f.inbox(undefined, false, new Date(f.now()).toISOString()));
-    const mixed = f.inbox('sent', version === 2); kept.push(mixed);
+    const mixed = f.inbox('sent', version >= 2); kept.push(mixed);
     f.store.db.prepare('INSERT INTO jobs(id,kind,lane,inboxId,payload,state) VALUES (?,?,?,?,?,?)').run('MOCK_mixed', 'event', 'event:MOCK', mixed.id, '{}', 'pending');
     f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_expired', f.alice.id, f.now() - 1);
-    if (version === 1) f.downgrade();
+    f.downgrade(version);
     f.store.close();
     const before = rows(f.path), bytes = readFileSync(f.path);
     const dry = runMaintenance(['purge', '--dry-run'], f.path, f.now());
@@ -72,7 +76,7 @@ for (const version of [1, 2] as const) test(`schema ${version}: scoped cleanup k
     const after = rows(f.path); assert.deepEqual(after.receipts, before.receipts); assert.deepEqual(after.version, before.version);
     assert.deepEqual((after.inbox as { id: string }[]).map(r => r.id), kept.map(r => r.id).sort((a, b) => (before.inbox as { id: string }[]).findIndex(x => x.id === a) - (before.inbox as { id: string }[]).findIndex(x => x.id === b)));
     assert.deepEqual((after.jobs as { state: string }[]).map(j => j.state), ['pending', 'sending', 'uncertain', 'sent', 'pending']);
-    if (version === 2) assert.equal((after.content_dispositions as unknown[]).length, 4);
+    if (version >= 2) assert.equal((after.content_dispositions as unknown[]).length, 4);
     const repeated = runMaintenance(['purge'], f.path, f.now()); assert.ok(Object.values(repeated.counts!).every(n => n === 0)); assert.deepEqual(rows(f.path), after);
   } finally { f.cleanup(); }
 });
@@ -168,13 +172,13 @@ test('schema 2: child-first FK ordering and any failure roll back all earlier de
   } finally { f.cleanup(); }
 });
 
-for (const version of [1, 2] as const) test(`schema ${version}: revoke validates first, is atomic, and never recovers sending work`, () => {
+for (const version of [1, 2, 3] as const) test(`schema ${version}: revoke validates first, is atomic, and never recovers sending work`, () => {
   const f = synthetic(), owner = 'a'.repeat(64);
   try {
-    f.inbox('sending'); if (version === 2) { f.mirror('pending'); f.mirror('sending'); f.mirror('uncertain'); }
-    for (const table of ['bindings', 'inbox', 'pairs', ...(version === 2 ? ['mirror_outbox'] : [])]) f.store.db.prepare(`UPDATE ${table} SET owner=?`).run(owner);
+    f.inbox('sending'); if (version >= 2) { f.mirror('pending'); f.mirror('sending'); f.mirror('uncertain'); }
+    for (const table of ['bindings', 'inbox', 'pairs', ...(version >= 2 ? ['mirror_outbox'] : [])]) f.store.db.prepare(`UPDATE ${table} SET owner=?`).run(owner);
     f.store.db.prepare('INSERT INTO pairs VALUES (?,?,?)').run('MOCK_revoke_pair', owner, f.now() + DAY);
-    if (version === 1) f.downgrade(); f.store.close();
+    f.downgrade(version); f.store.close();
     const before = rows(f.path); runMaintenance(['revoke', owner, '--dry-run'], f.path, f.now()); assert.deepEqual(rows(f.path), before);
     const original = DatabaseSync.prototype.prepare;
     try {
@@ -185,7 +189,7 @@ for (const version of [1, 2] as const) test(`schema ${version}: revoke validates
     assert.equal(runMaintenance(['revoke', owner], f.path, f.now()).event, 'account_revoked');
     const after = rows(f.path); assert.equal((after.bindings as { active: number }[])[0]!.active, 0); assert.deepEqual(after.pairs, []);
     assert.equal((after.jobs as { state: string }[])[0]!.state, 'sending');
-    if (version === 2) assert.deepEqual((after.mirror_outbox as { state: string }[]).map(r => r.state), ['cancelled', 'sending', 'uncertain']);
+    if (version >= 2) assert.deepEqual((after.mirror_outbox as { state: string }[]).map(r => r.state), ['cancelled', 'sending', 'uncertain']);
     runMaintenance(['revoke', owner], f.path, f.now()); assert.deepEqual(rows(f.path), after);
   } finally { f.cleanup(); }
 });

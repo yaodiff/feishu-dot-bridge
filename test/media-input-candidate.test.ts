@@ -110,7 +110,7 @@ test('all persisted identity columns remain tied to original capability', async 
 test('duplicate cannot replace key/reset TTL; retains schema 2 without blob persistence', async () => {
   const f = setup(); try {
     f.receive(); f.advance(1000); assert.equal(f.receive({ ...image, resourceKey: 'img_different' }).state, 'duplicate');
-    assert.equal(f.store.db.prepare('PRAGMA user_version').get()!.user_version, 2);
+    assert.equal(f.store.db.prepare('PRAGMA user_version').get()!.user_version, 3);
     assert.equal(f.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().some(x => String(x.name).includes('media')), false);
     f.advance(MEDIA_LIMITS.referenceTtlMs - 1000); await assert.rejects(f.media.read(f.alice, { event_id: eventId() }), code('media_not_available'));
   } finally { f.close(); }
